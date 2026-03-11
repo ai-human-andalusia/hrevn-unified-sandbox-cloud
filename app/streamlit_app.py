@@ -16,11 +16,15 @@ from common.security import evaluate_secret_posture, redact_config_for_ui
 from common.services.ai_router import choose_ai_provider
 from common.services.gmail_connector import get_mail_connector_status
 from common.services.github_connector import get_github_connector_status
-from common.services.telegram_connector import get_telegram_connector_status
+from common.services.telegram_connector import (
+    get_telegram_connector_status,
+    send_controlled_test_message,
+)
 from common.tools.secret_hygiene_scan import run_secret_hygiene_scan
 
 
-ROOT = Path("/Users/miguelmiguel/CODEX/HREVN UNIFIED V1 SANDBOX")
+# Repo root (works in local and Streamlit Cloud).
+ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_DIR = ROOT / "schema"
 MAPPINGS_DIR = ROOT / "mappings"
 DOCS_DIR = ROOT / "docs"
@@ -273,6 +277,29 @@ def render_dry_run_dashboard() -> None:
             "telegram_ready": tg.ready,
         }
     )
+
+    st.markdown("### Telegram Controlled Test")
+    st.caption("One explicit send per click. Use only for controlled validation.")
+    test_message = st.text_input(
+        "Test message",
+        value="[HREVN CLOUD] Controlled Telegram test",
+        key="telegram_test_message",
+    )
+    confirm_send = st.checkbox(
+        "I confirm sending one controlled Telegram test message now.",
+        key="telegram_test_confirm",
+    )
+    if st.button("Send Telegram Controlled Test", key="telegram_test_send"):
+        if not confirm_send:
+            st.warning("Please confirm before sending the test message.")
+        elif not tg.ready:
+            st.error("Telegram is not ready. Check secrets and connector status first.")
+        else:
+            ok, detail = send_controlled_test_message(test_message)
+            if ok:
+                st.success(f"Telegram test sent successfully ({detail}).")
+            else:
+                st.error(f"Telegram test failed ({detail}).")
 
     findings = run_secret_hygiene_scan(ROOT)
     st.write(f"Secret hygiene scan findings (max 25): {len(findings)}")
