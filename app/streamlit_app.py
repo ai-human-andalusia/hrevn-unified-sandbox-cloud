@@ -17,6 +17,10 @@ from common.security import evaluate_secret_posture, redact_config_for_ui
 from common.services.ai_router import choose_ai_provider
 from common.services.gmail_connector import get_mail_connector_status
 from common.services.github_connector import get_github_connector_status
+from common.services.real_estate_sqlite import (
+    build_real_estate_end_to_end_preview,
+    load_real_estate_snapshot,
+)
 from common.services.telegram_connector import (
     get_telegram_connector_status,
     send_controlled_test_message,
@@ -33,6 +37,7 @@ SAMPLES_DIR = ROOT / "samples"
 IMPORTERS_DIR = ROOT / "importers"
 TESTS_DIR = ROOT / "tests"
 APP_DATA_DIR = ROOT / "app" / "data"
+REAL_ESTATE_SQLITE_PATH = APP_DATA_DIR / "real_estate" / "hrevn_real_estate.db"
 
 
 @dataclass
@@ -132,26 +137,33 @@ def _stats_for(path: Path) -> Dict[str, int]:
 
 def render_real_estate_vertical() -> None:
     st.subheader("Real Estate Vertical")
-    st.caption("First unified vertical slice using documentary/demo data from sandbox B patterns.")
+    st.caption("First unified vertical slice using SQLite snapshot from sandbox B, with end-to-end preview.")
 
-    payload = _load_json(APP_DATA_DIR / "real_estate_demo.json")
-    if not isinstance(payload, dict):
-        st.error("Real Estate demo payload not available.")
+    if not REAL_ESTATE_SQLITE_PATH.exists():
+        st.error("Real Estate SQLite snapshot not available.")
         return
 
-    assets = payload.get("assets", [])
-    sessions = payload.get("sessions", [])
-    output_templates = payload.get("output_templates", [])
-    certificate_preview = payload.get("certificate_preview", {})
-    mapping_highlights = payload.get("mapping_highlights", [])
-    open_questions = payload.get("open_questions", [])
+    snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
+    assets = snapshot.assets
+    sessions = snapshot.visits
+    mapping_highlights = [
+        "SQLite landing tables active: assets, visits, observations, photos",
+        "Visit report preview aligned to inherited v1.1/v1.3 report families",
+        "Certificate preview aligned to inherited institutional certificate placeholders",
+        "Validation remains documentary-safe and read-only",
+    ]
+    open_questions = [
+        "Normalize asset_type versus asset_template_type for cleaner operational semantics",
+        "Promote emitted hashes and sequence ids from preview into persistent controlled output records",
+        "Replace preview emitter with real unified output engine after panel input is connected",
+    ]
 
     asset_type_counts = Counter(item.get("asset_type", "unknown") for item in assets if isinstance(item, dict))
-    session_state_counts = Counter(item.get("state", "unknown") for item in sessions if isinstance(item, dict))
+    session_state_counts = Counter(item.get("review_status", "unknown") for item in sessions if isinstance(item, dict))
     ready_or_issued = sum(
         1
         for item in sessions
-        if isinstance(item, dict) and item.get("certification_status") in {"pending", "issued"}
+        if isinstance(item, dict) and item.get("certification_status") in {"pending", "issued", None, ""}
     )
 
     m1, m2, m3, m4 = st.columns(4)
@@ -159,6 +171,10 @@ def render_real_estate_vertical() -> None:
     m2.metric("Sessions", len(sessions))
     m3.metric("Ready or Issued Outputs", ready_or_issued)
     m4.metric("Asset Types", len(asset_type_counts))
+
+    visit_ids = [item.get("visit_id") for item in sessions if isinstance(item, dict) and item.get("visit_id")]
+    selected_visit = st.selectbox("Visit for end-to-end preview", options=visit_ids)
+    e2e_preview = build_real_estate_end_to_end_preview(snapshot, selected_visit) if selected_visit else None
 
     c1, c2 = st.columns([1.3, 1.0])
     with c1:
@@ -182,19 +198,34 @@ def render_real_estate_vertical() -> None:
 
     with c4:
         st.markdown("### Output Layer")
-        st.dataframe(output_templates, use_container_width=True)
-        if isinstance(certificate_preview, dict):
-            st.markdown("### Certificate Preview")
-            st.write(
-                {
-                    "visit_id": certificate_preview.get("visit_id"),
-                    "asset_public_id": certificate_preview.get("asset_public_id"),
-                    "issued_state": certificate_preview.get("issued_state"),
-                    "certificate_status": certificate_preview.get("certificate_status"),
-                    "evidence_bundle": certificate_preview.get("evidence_bundle"),
-                }
-            )
-            st.info(str(certificate_preview.get("summary", "")))
+        st.write(
+            [
+                {"artifact": "baseline_log", "role": "human-readable baseline evidence log"},
+                {"artifact": "visit_report", "role": "review-ready operational PDF"},
+                {"artifact": "certificate", "role": "institutional certificate output"},
+            ]
+        )
+
+    if not e2e_preview:
+        st.warning("No end-to-end preview available for the selected visit.")
+        return
+
+    st.markdown("### End-To-End Dry Run")
+    st.write({"validation_ok": e2e_preview["validation_ok"], "visit_id": selected_visit})
+    st.json(e2e_preview["validation_checks"])
+
+    p1, p2 = st.columns(2)
+    with p1:
+        st.markdown("### Certificate Preview")
+        st.json(e2e_preview["certificate_preview"])
+        st.markdown("### Visit Report Preview")
+        st.json(e2e_preview["visit_report_preview"])
+
+    with p2:
+        st.markdown("### Observation Preview")
+        st.dataframe(e2e_preview["observations_preview"], use_container_width=True)
+        st.markdown("### Photo Evidence Preview")
+        st.dataframe(e2e_preview["photos_preview"], use_container_width=True)
 
 
 def render_schema_explorer() -> None:
