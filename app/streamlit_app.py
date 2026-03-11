@@ -6,7 +6,6 @@ No real access, no SQLite, no external data.
 from __future__ import annotations
 
 import json
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -17,10 +16,7 @@ from common.security import evaluate_secret_posture, redact_config_for_ui
 from common.services.ai_router import choose_ai_provider
 from common.services.gmail_connector import get_mail_connector_status
 from common.services.github_connector import get_github_connector_status
-from common.services.real_estate_sqlite import (
-    build_real_estate_end_to_end_preview,
-    load_real_estate_snapshot,
-)
+from common.services.real_estate_sqlite import load_real_estate_snapshot
 from common.services.telegram_connector import (
     get_telegram_connector_status,
     send_controlled_test_message,
@@ -137,7 +133,7 @@ def _stats_for(path: Path) -> Dict[str, int]:
 
 def render_real_estate_vertical() -> None:
     st.subheader("Real Estate Vertical")
-    st.caption("First unified vertical slice using SQLite snapshot from sandbox B, with end-to-end preview.")
+    st.caption("Working view over the Real Estate SQLite snapshot.")
 
     if not REAL_ESTATE_SQLITE_PATH.exists():
         st.error("Real Estate SQLite snapshot not available.")
@@ -146,86 +142,54 @@ def render_real_estate_vertical() -> None:
     snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
     assets = snapshot.assets
     sessions = snapshot.visits
-    mapping_highlights = [
-        "SQLite landing tables active: assets, visits, observations, photos",
-        "Visit report preview aligned to inherited v1.1/v1.3 report families",
-        "Certificate preview aligned to inherited institutional certificate placeholders",
-        "Validation remains documentary-safe and read-only",
-    ]
-    open_questions = [
-        "Normalize asset_type versus asset_template_type for cleaner operational semantics",
-        "Promote emitted hashes and sequence ids from preview into persistent controlled output records",
-        "Replace preview emitter with real unified output engine after panel input is connected",
-    ]
-
-    asset_type_counts = Counter(item.get("asset_type", "unknown") for item in assets if isinstance(item, dict))
-    session_state_counts = Counter(item.get("review_status", "unknown") for item in sessions if isinstance(item, dict))
     ready_or_issued = sum(
         1
         for item in sessions
         if isinstance(item, dict) and item.get("certification_status") in {"pending", "issued", None, ""}
+    )
+    cities = sorted(
+        {
+            str(item.get("asset_city")).strip()
+            for item in assets
+            if isinstance(item, dict) and item.get("asset_city")
+        }
     )
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Assets", len(assets))
     m2.metric("Sessions", len(sessions))
     m3.metric("Ready or Issued Outputs", ready_or_issued)
-    m4.metric("Asset Types", len(asset_type_counts))
+    m4.metric("Cities", len(cities))
 
     visit_ids = [item.get("visit_id") for item in sessions if isinstance(item, dict) and item.get("visit_id")]
-    selected_visit = st.selectbox("Visit for end-to-end preview", options=visit_ids)
-    e2e_preview = build_real_estate_end_to_end_preview(snapshot, selected_visit) if selected_visit else None
+    selected_visit = st.selectbox("Selected visit", options=visit_ids)
+    selected_session = next((item for item in sessions if item.get("visit_id") == selected_visit), None)
+    selected_observations = [item for item in snapshot.observations if item.get("visit_id") == selected_visit]
+    selected_photos = [item for item in snapshot.photos if item.get("visit_id") == selected_visit]
 
-    c1, c2 = st.columns([1.3, 1.0])
+    c1, c2 = st.columns(2)
     with c1:
-        st.markdown("### Operational Pipeline")
-        st.bar_chart(session_state_counts)
+        st.markdown("### Visits")
         st.dataframe(sessions, use_container_width=True)
 
     with c2:
-        st.markdown("### Asset Mix")
-        st.bar_chart(asset_type_counts)
+        st.markdown("### Assets")
         st.dataframe(assets, use_container_width=True)
 
-    c3, c4 = st.columns(2)
-    with c3:
-        st.markdown("### Mapping Highlights")
-        for item in mapping_highlights:
-            st.write(f"- {item}")
-        st.markdown("### Open Questions")
-        for item in open_questions:
-            st.write(f"- {item}")
-
-    with c4:
-        st.markdown("### Output Layer")
-        st.write(
-            [
-                {"artifact": "baseline_log", "role": "human-readable baseline evidence log"},
-                {"artifact": "visit_report", "role": "review-ready operational PDF"},
-                {"artifact": "certificate", "role": "institutional certificate output"},
-            ]
-        )
-
-    if not e2e_preview:
-        st.warning("No end-to-end preview available for the selected visit.")
-        return
-
-    st.markdown("### End-To-End Dry Run")
-    st.write({"validation_ok": e2e_preview["validation_ok"], "visit_id": selected_visit})
-    st.json(e2e_preview["validation_checks"])
+    st.markdown("### Current Visit")
+    if selected_session:
+        st.dataframe([selected_session], use_container_width=True)
+    else:
+        st.info("No visit selected.")
 
     p1, p2 = st.columns(2)
     with p1:
-        st.markdown("### Certificate Preview")
-        st.json(e2e_preview["certificate_preview"])
-        st.markdown("### Visit Report Preview")
-        st.json(e2e_preview["visit_report_preview"])
+        st.markdown("### Observations")
+        st.dataframe(selected_observations, use_container_width=True)
 
     with p2:
-        st.markdown("### Observation Preview")
-        st.dataframe(e2e_preview["observations_preview"], use_container_width=True)
-        st.markdown("### Photo Evidence Preview")
-        st.dataframe(e2e_preview["photos_preview"], use_container_width=True)
+        st.markdown("### Photos")
+        st.dataframe(selected_photos, use_container_width=True)
 
 
 def render_schema_explorer() -> None:
