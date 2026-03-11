@@ -1,0 +1,320 @@
+"""Streamlit app for documentary-only sandbox exploration.
+
+No real access, no SQLite, no external data.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+import streamlit as st
+from common.config import load_common_config
+from common.security import evaluate_secret_posture, redact_config_for_ui
+from common.services.ai_router import choose_ai_provider
+from common.services.gmail_connector import get_mail_connector_status
+from common.services.github_connector import get_github_connector_status
+from common.services.telegram_connector import get_telegram_connector_status
+from common.tools.secret_hygiene_scan import run_secret_hygiene_scan
+
+
+ROOT = Path("/Users/miguelmiguel/CODEX/HREVN UNIFIED V1 SANDBOX")
+SCHEMA_DIR = ROOT / "schema"
+MAPPINGS_DIR = ROOT / "mappings"
+DOCS_DIR = ROOT / "docs"
+SAMPLES_DIR = ROOT / "samples"
+IMPORTERS_DIR = ROOT / "importers"
+TESTS_DIR = ROOT / "tests"
+
+
+@dataclass
+class ValidationResult:
+    file_name: str
+    ok: bool
+    checks: Dict[str, bool]
+    notes: List[str]
+
+
+def _safe_read(path: Path, max_chars: int = 12000) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return text[:max_chars]
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"[read_error] {exc}"
+
+
+def _list_files(directory: Path, patterns: Tuple[str, ...]) -> List[Path]:
+    files: List[Path] = []
+    for pattern in patterns:
+        files.extend(directory.glob(pattern))
+    return sorted([f for f in files if f.is_file()])
+
+
+def _load_yaml_if_available(raw: str):
+    try:
+        import yaml  # type: ignore
+
+        return yaml.safe_load(raw), None
+    except Exception as exc:  # pragma: no cover - runtime dependency
+        return None, str(exc)
+
+
+def _validate_mapping_file(path: Path) -> ValidationResult:
+    raw = _safe_read(path, max_chars=200000)
+    parsed, yaml_err = _load_yaml_if_available(raw)
+
+    checks = {
+        "has_source_table_text": "source_table" in raw,
+        "has_mappings_text": "mappings" in raw,
+        "has_related_ids_text": "related_" in raw,
+        "yaml_parseable": yaml_err is None,
+    }
+    notes: List[str] = []
+
+    if yaml_err is not None:
+        notes.append("PyYAML unavailable or YAML parse error. Text checks still applied.")
+        notes.append(f"parser_detail: {yaml_err}")
+    else:
+        if not isinstance(parsed, dict):
+            notes.append("Top-level YAML should be a dictionary-like object.")
+        else:
+            if "source" not in parsed and "source_table" not in parsed:
+                notes.append("Missing top-level `source`/`source_table` key.")
+            if "mappings" not in parsed:
+                notes.append("Missing top-level `mappings` key.")
+
+    ok = all(checks.values()) if yaml_err is None else (
+        checks["has_source_table_text"] and checks["has_mappings_text"]
+    )
+    return ValidationResult(path.name, ok, checks, notes)
+
+
+def _directory_snapshot() -> List[Tuple[str, Path]]:
+    return [
+        ("docs", DOCS_DIR),
+        ("samples", SAMPLES_DIR),
+        ("schema", SCHEMA_DIR),
+        ("mappings", MAPPINGS_DIR),
+        ("importers", IMPORTERS_DIR),
+        ("tests", TESTS_DIR),
+    ]
+
+
+def _stats_for(path: Path) -> Dict[str, int]:
+    files = [p for p in path.rglob("*") if p.is_file()]
+    return {
+        "files": len(files),
+        "md": len([f for f in files if f.suffix.lower() == ".md"]),
+        "yaml_yml": len([f for f in files if f.suffix.lower() in {".yaml", ".yml"}]),
+        "json": len([f for f in files if f.suffix.lower() == ".json"]),
+        "py": len([f for f in files if f.suffix.lower() == ".py"]),
+    }
+
+
+def render_schema_explorer() -> None:
+    st.subheader("Schema Explorer")
+    st.caption("Read-only browsing of schema artifacts inside the sandbox.")
+
+    schema_files = _list_files(
+        SCHEMA_DIR,
+        (
+            "*.md",
+            "*.yaml",
+            "*.yml",
+            "*.json",
+            "*.sql",
+        ),
+    )
+
+    if not schema_files:
+        st.warning("No schema files found.")
+        return
+
+    selected = st.selectbox(
+        "Select schema artifact",
+        options=schema_files,
+        format_func=lambda p: p.name,
+    )
+
+    st.write(f"Path: `{selected}`")
+    content = _safe_read(selected)
+
+    if selected.suffix.lower() == ".json":
+        try:
+            parsed = json.loads(content)
+            st.json(parsed)
+            return
+        except Exception:
+            pass
+
+    st.code(content, language="text")
+
+
+def render_mapping_validator() -> None:
+    st.subheader("Mapping Validator UI")
+    st.caption("Lightweight structural checks for mapping files. No source DB access.")
+
+    mapping_files = _list_files(MAPPINGS_DIR, ("*.yaml", "*.yml"))
+
+    if not mapping_files:
+        st.warning("No mapping files found.")
+        return
+
+    run_all = st.toggle("Validate all mapping files", value=True)
+
+    targets = mapping_files
+    if not run_all:
+        one = st.selectbox(
+            "Select mapping file",
+            options=mapping_files,
+            format_func=lambda p: p.name,
+        )
+        targets = [one]
+
+    results = [_validate_mapping_file(path) for path in targets]
+
+    summary = {
+        "files_validated": len(results),
+        "valid": sum(1 for r in results if r.ok),
+        "invalid": sum(1 for r in results if not r.ok),
+    }
+    st.metric("Validated files", summary["files_validated"])
+    st.write(summary)
+
+    for r in results:
+        with st.expander(f"{r.file_name} — {'OK' if r.ok else 'CHECK'}", expanded=not r.ok):
+            st.write("Checks:")
+            st.json(r.checks)
+            if r.notes:
+                st.write("Notes:")
+                for note in r.notes:
+                    st.write(f"- {note}")
+
+
+def render_dry_run_dashboard() -> None:
+    st.subheader("Dry-Run Convergence Dashboard")
+    st.caption("Static documentary/project signals only. No execution against real systems.")
+
+    rows = []
+    for name, path in _directory_snapshot():
+        stats = _stats_for(path)
+        rows.append(
+            {
+                "area": name,
+                "files": stats["files"],
+                "md": stats["md"],
+                "yaml_yml": stats["yaml_yml"],
+                "json": stats["json"],
+                "py": stats["py"],
+            }
+        )
+
+    st.dataframe(rows, use_container_width=True)
+
+    st.markdown("### Sandbox Safety State")
+    st.write(
+        {
+            "real_access_enabled": False,
+            "sqlite_connections": False,
+            "real_data_reads": False,
+            "mode": "documentation_only",
+        }
+    )
+
+    st.markdown("### Unified Common Layer (Local-Only)")
+    cfg = load_common_config()
+    posture = evaluate_secret_posture(cfg)
+    provider = choose_ai_provider(cfg)
+    mail = get_mail_connector_status(cfg)
+    gh = get_github_connector_status(cfg)
+    tg = get_telegram_connector_status(cfg)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("Redacted connector config")
+        st.json(redact_config_for_ui(cfg))
+    with c2:
+        st.write("Operational selection")
+        st.json(
+            {
+                "ai_provider_selected": provider.selected,
+                "ai_provider_reason": provider.reason,
+                "mail_preferred_channel": mail.preferred_channel,
+                "github_ready_for_push_ops": gh.ready_for_push_ops,
+                "telegram_ready": tg.ready,
+            }
+        )
+
+    st.write("Secret posture checks")
+    st.json(
+        {
+            "openai_ok": posture.openai_ok,
+            "gemini_ok": posture.gemini_ok,
+            "gmail_oauth_ok": posture.gmail_oauth_ok,
+            "smtp_ok": posture.smtp_ok,
+            "github_ok": posture.github_ok,
+            "telegram_ok": posture.telegram_ok,
+        }
+    )
+
+    st.write("Connector readiness")
+    st.json(
+        {
+            "gmail_oauth_ready": mail.gmail_oauth_ready,
+            "smtp_ready": mail.smtp_ready,
+            "github_repo_ref_set": gh.repo_ref_set,
+            "github_token_set": gh.token_set,
+            "github_branch": gh.branch,
+            "telegram_enabled": tg.enabled,
+            "telegram_bot_token_set": tg.bot_token_set,
+            "telegram_chat_id_set": tg.chat_id_set,
+            "telegram_ready": tg.ready,
+        }
+    )
+
+    findings = run_secret_hygiene_scan(ROOT)
+    st.write(f"Secret hygiene scan findings (max 25): {len(findings)}")
+    if findings:
+        st.dataframe(
+            [
+                {
+                    "file_path": f.file_path,
+                    "line_number": f.line_number,
+                    "category": f.category,
+                    "snippet": f.snippet,
+                }
+                for f in findings
+            ],
+            use_container_width=True,
+        )
+    else:
+        st.success("No obvious hardcoded secret patterns detected in scanned files.")
+
+
+def main() -> None:
+    st.set_page_config(page_title="HREVN Sandbox — Documentary Panels", layout="wide")
+    st.title("HREVN UNIFIED V1 SANDBOX — Streamlit Panels")
+    st.caption(
+        "Documentary-only UI. No real source access, no SQLite, no real data reads."
+    )
+
+    tab_schema, tab_mapping, tab_dryrun = st.tabs(
+        [
+            "Schema Explorer",
+            "Mapping Validator UI",
+            "Dry-Run Convergence Dashboard",
+        ]
+    )
+
+    with tab_schema:
+        render_schema_explorer()
+    with tab_mapping:
+        render_mapping_validator()
+    with tab_dryrun:
+        render_dry_run_dashboard()
+
+
+if __name__ == "__main__":
+    main()
