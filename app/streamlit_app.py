@@ -6,6 +6,7 @@ No real access, no SQLite, no external data.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -31,6 +32,7 @@ DOCS_DIR = ROOT / "docs"
 SAMPLES_DIR = ROOT / "samples"
 IMPORTERS_DIR = ROOT / "importers"
 TESTS_DIR = ROOT / "tests"
+APP_DATA_DIR = ROOT / "app" / "data"
 
 
 @dataclass
@@ -63,6 +65,15 @@ def _load_yaml_if_available(raw: str):
         return yaml.safe_load(raw), None
     except Exception as exc:  # pragma: no cover - runtime dependency
         return None, str(exc)
+
+
+def _load_json(path: Path) -> object | None:
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # pragma: no cover - defensive
+        return None
 
 
 def _validate_mapping_file(path: Path) -> ValidationResult:
@@ -107,6 +118,8 @@ def _directory_snapshot() -> List[Tuple[str, Path]]:
 
 
 def _stats_for(path: Path) -> Dict[str, int]:
+    if not path.exists() or not path.is_dir():
+        return {"files": 0, "md": 0, "yaml_yml": 0, "json": 0, "py": 0}
     files = [p for p in path.rglob("*") if p.is_file()]
     return {
         "files": len(files),
@@ -115,6 +128,73 @@ def _stats_for(path: Path) -> Dict[str, int]:
         "json": len([f for f in files if f.suffix.lower() == ".json"]),
         "py": len([f for f in files if f.suffix.lower() == ".py"]),
     }
+
+
+def render_real_estate_vertical() -> None:
+    st.subheader("Real Estate Vertical")
+    st.caption("First unified vertical slice using documentary/demo data from sandbox B patterns.")
+
+    payload = _load_json(APP_DATA_DIR / "real_estate_demo.json")
+    if not isinstance(payload, dict):
+        st.error("Real Estate demo payload not available.")
+        return
+
+    assets = payload.get("assets", [])
+    sessions = payload.get("sessions", [])
+    output_templates = payload.get("output_templates", [])
+    certificate_preview = payload.get("certificate_preview", {})
+    mapping_highlights = payload.get("mapping_highlights", [])
+    open_questions = payload.get("open_questions", [])
+
+    asset_type_counts = Counter(item.get("asset_type", "unknown") for item in assets if isinstance(item, dict))
+    session_state_counts = Counter(item.get("state", "unknown") for item in sessions if isinstance(item, dict))
+    ready_or_issued = sum(
+        1
+        for item in sessions
+        if isinstance(item, dict) and item.get("certification_status") in {"pending", "issued"}
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Assets", len(assets))
+    m2.metric("Sessions", len(sessions))
+    m3.metric("Ready or Issued Outputs", ready_or_issued)
+    m4.metric("Asset Types", len(asset_type_counts))
+
+    c1, c2 = st.columns([1.3, 1.0])
+    with c1:
+        st.markdown("### Operational Pipeline")
+        st.bar_chart(session_state_counts)
+        st.dataframe(sessions, use_container_width=True)
+
+    with c2:
+        st.markdown("### Asset Mix")
+        st.bar_chart(asset_type_counts)
+        st.dataframe(assets, use_container_width=True)
+
+    c3, c4 = st.columns(2)
+    with c3:
+        st.markdown("### Mapping Highlights")
+        for item in mapping_highlights:
+            st.write(f"- {item}")
+        st.markdown("### Open Questions")
+        for item in open_questions:
+            st.write(f"- {item}")
+
+    with c4:
+        st.markdown("### Output Layer")
+        st.dataframe(output_templates, use_container_width=True)
+        if isinstance(certificate_preview, dict):
+            st.markdown("### Certificate Preview")
+            st.write(
+                {
+                    "visit_id": certificate_preview.get("visit_id"),
+                    "asset_public_id": certificate_preview.get("asset_public_id"),
+                    "issued_state": certificate_preview.get("issued_state"),
+                    "certificate_status": certificate_preview.get("certificate_status"),
+                    "evidence_bundle": certificate_preview.get("evidence_bundle"),
+                }
+            )
+            st.info(str(certificate_preview.get("summary", "")))
 
 
 def render_schema_explorer() -> None:
@@ -327,14 +407,17 @@ def main() -> None:
         "Documentary-only UI. No real source access, no SQLite, no real data reads."
     )
 
-    tab_schema, tab_mapping, tab_dryrun = st.tabs(
+    tab_re, tab_schema, tab_mapping, tab_dryrun = st.tabs(
         [
+            "Real Estate Vertical",
             "Schema Explorer",
             "Mapping Validator UI",
             "Dry-Run Convergence Dashboard",
         ]
     )
 
+    with tab_re:
+        render_real_estate_vertical()
     with tab_schema:
         render_schema_explorer()
     with tab_mapping:

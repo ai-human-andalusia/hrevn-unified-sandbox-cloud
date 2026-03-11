@@ -1,0 +1,106 @@
+{
+  "vertical": "real_estate",
+  "source_system": "B",
+  "as_of": "2026-03-12T09:00:00Z",
+  "assets": [
+    {
+      "asset_id": "AS-1001",
+      "asset_public_id": "RE-MAD-001",
+      "asset_type": "residential_unit",
+      "city": "Madrid",
+      "client_name": "Tejador Operations",
+      "template_code": "institutional_residential_v1",
+      "status": "active"
+    },
+    {
+      "asset_id": "AS-1002",
+      "asset_public_id": "RE-SEV-014",
+      "asset_type": "residential_unit",
+      "city": "Seville",
+      "client_name": "Tejador Operations",
+      "template_code": "institutional_residential_v1",
+      "status": "active"
+    },
+    {
+      "asset_id": "AS-1003",
+      "asset_public_id": "RE-BCN-003",
+      "asset_type": "commercial_unit",
+      "city": "Barcelona",
+      "client_name": "Asset Recovery Iberia",
+      "template_code": "institutional_commercial_v1",
+      "status": "active"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "SE-2001",
+      "visit_id": "VIS-RE-0001",
+      "asset_id": "AS-1001",
+      "state": "capturing",
+      "review_status": "draft",
+      "certification_status": "pending",
+      "started_at": "2026-03-10T10:00:00Z",
+      "observations": 7,
+      "photos": 19
+    },
+    {
+      "session_id": "SE-2002",
+      "visit_id": "VIS-RE-0002",
+      "asset_id": "AS-1002",
+      "state": "ready",
+      "review_status": "review_ready",
+      "certification_status": "pending",
+      "started_at": "2026-03-10T11:00:00Z",
+      "observations": 9,
+      "photos": 24
+    },
+    {
+      "session_id": "SE-2003",
+      "visit_id": "VIS-RE-0003",
+      "asset_id": "AS-1003",
+      "state": "completed",
+      "review_status": "approved",
+      "certification_status": "issued",
+      "started_at": "2026-03-10T12:00:00Z",
+      "observations": 6,
+      "photos": 17
+    }
+  ],
+  "mapping_highlights": [
+    "assets -> core_assets",
+    "visits -> core_sessions",
+    "observations -> core_observations",
+    "photos -> core_media",
+    "attachments -> core_attachments"
+  ],
+  "open_questions": [
+    "client/domain ownership still pending normalization into platform_org",
+    "historical asset_type values remain partially inconsistent",
+    "issued_* visit fields may move into certificate lineage tables"
+  ],
+  "output_templates": [
+    {
+      "artifact": "baseline_log",
+      "template_family": "HREVN_BASELINE_LOG_TEMPLATE_v1_5_INSTITUTIONAL",
+      "role": "human-readable baseline evidence log"
+    },
+    {
+      "artifact": "visit_report",
+      "template_family": "VISIT_REPORT_v1_x",
+      "role": "operational review-ready report"
+    },
+    {
+      "artifact": "certificate",
+      "template_family": "HREVN_CERTIFICATE_TEMPLATE_v1_9_INSTITUTIONAL",
+      "role": "final institutional output"
+    }
+  ],
+  "certificate_preview": {
+    "visit_id": "VIS-RE-0003",
+    "asset_public_id": "RE-BCN-003",
+    "issued_state": "issued",
+    "summary": "Commercial unit review completed with evidence package, visit report and certificate output aligned to institutional template family.",
+    "evidence_bundle": "bundle_re_0003",
+    "certificate_status": "ready_for_delivery"
+  }
+}
