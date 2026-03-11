@@ -1,6 +1,6 @@
 """Streamlit app for documentary-only sandbox exploration.
 
-No real access, no SQLite, no external data.
+No real access, no external source systems, documentary-safe views only.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from common.services.telegram_connector import (
 from common.tools.secret_hygiene_scan import run_secret_hygiene_scan
 
 
-# Repo root (works in local and Streamlit Cloud).
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_DIR = ROOT / "schema"
 MAPPINGS_DIR = ROOT / "mappings"
@@ -48,7 +47,7 @@ def _safe_read(path: Path, max_chars: int = 12000) -> str:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
         return text[:max_chars]
-    except Exception as exc:  # pragma: no cover - defensive
+    except Exception as exc:
         return f"[read_error] {exc}"
 
 
@@ -64,17 +63,8 @@ def _load_yaml_if_available(raw: str):
         import yaml  # type: ignore
 
         return yaml.safe_load(raw), None
-    except Exception as exc:  # pragma: no cover - runtime dependency
+    except Exception as exc:
         return None, str(exc)
-
-
-def _load_json(path: Path) -> object | None:
-    if not path.exists() or not path.is_file():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
-    except Exception:  # pragma: no cover - defensive
-        return None
 
 
 def _validate_mapping_file(path: Path) -> ValidationResult:
@@ -131,15 +121,40 @@ def _stats_for(path: Path) -> Dict[str, int]:
     }
 
 
-def render_real_estate_vertical() -> None:
-    st.subheader("Real Estate Vertical")
-    st.caption("Working view over the Real Estate SQLite snapshot.")
+def _prepare_real_estate_context(snapshot, visit_id: str) -> dict:
+    visits = snapshot.visits
+    assets = snapshot.assets
+    observations = snapshot.observations
+    photos = snapshot.photos
 
-    if not REAL_ESTATE_SQLITE_PATH.exists():
-        st.error("Real Estate SQLite snapshot not available.")
-        return
+    selected_visit = next((item for item in visits if item.get("visit_id") == visit_id), None)
+    selected_asset = None
+    if selected_visit:
+        selected_asset = next(
+            (item for item in assets if item.get("asset_id") == selected_visit.get("asset_id")),
+            None,
+        )
 
-    snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
+    selected_observations = [item for item in observations if item.get("visit_id") == visit_id]
+    selected_photos = [item for item in photos if item.get("visit_id") == visit_id]
+
+    lpi_options = sorted({str(item.get("lpi_code") or "").strip() for item in observations if item.get("lpi_code")})
+    severity_counts: dict[int, int] = {}
+    for item in selected_observations:
+        sev = int(item.get("severity_0_5") or 0)
+        severity_counts[sev] = severity_counts.get(sev, 0) + 1
+
+    return {
+        "selected_visit": selected_visit,
+        "selected_asset": selected_asset,
+        "selected_observations": selected_observations,
+        "selected_photos": selected_photos,
+        "lpi_options": lpi_options,
+        "severity_counts": severity_counts,
+    }
+
+
+def _render_real_estate_overview(snapshot, visit_id: str, context: dict) -> None:
     assets = snapshot.assets
     sessions = snapshot.visits
     ready_or_issued = sum(
@@ -157,39 +172,245 @@ def render_real_estate_vertical() -> None:
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Assets", len(assets))
-    m2.metric("Sessions", len(sessions))
-    m3.metric("Ready or Issued Outputs", ready_or_issued)
+    m2.metric("Visits", len(sessions))
+    m3.metric("Ready or Issued", ready_or_issued)
     m4.metric("Cities", len(cities))
-
-    visit_ids = [item.get("visit_id") for item in sessions if isinstance(item, dict) and item.get("visit_id")]
-    selected_visit = st.selectbox("Selected visit", options=visit_ids)
-    selected_session = next((item for item in sessions if item.get("visit_id") == selected_visit), None)
-    selected_observations = [item for item in snapshot.observations if item.get("visit_id") == selected_visit]
-    selected_photos = [item for item in snapshot.photos if item.get("visit_id") == selected_visit]
 
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("### Visits")
         st.dataframe(sessions, use_container_width=True)
-
     with c2:
         st.markdown("### Assets")
         st.dataframe(assets, use_container_width=True)
 
-    st.markdown("### Current Visit")
-    if selected_session:
-        st.dataframe([selected_session], use_container_width=True)
+    st.markdown("### Selected Visit")
+    if context["selected_visit"]:
+        st.dataframe([context["selected_visit"]], use_container_width=True)
     else:
         st.info("No visit selected.")
 
     p1, p2 = st.columns(2)
     with p1:
         st.markdown("### Observations")
-        st.dataframe(selected_observations, use_container_width=True)
-
+        st.dataframe(context["selected_observations"], use_container_width=True)
     with p2:
         st.markdown("### Photos")
-        st.dataframe(selected_photos, use_container_width=True)
+        st.dataframe(context["selected_photos"], use_container_width=True)
+
+
+def _render_legacy_panel_a(context: dict) -> None:
+    st.markdown("### Legacy Panel A — Operational Observation Panel")
+    st.caption("Recreated from `hrevn_panel.py`. Read-only comparison of the legacy observation workflow.")
+
+    visit = context["selected_visit"] or {}
+    asset = context["selected_asset"] or {}
+    observations = context["selected_observations"]
+    photos = context["selected_photos"]
+    lpi_options = context["lpi_options"]
+
+    st.write(
+        {
+            "visit_id": visit.get("visit_id"),
+            "asset_id": visit.get("asset_id"),
+            "asset_public_id": asset.get("asset_public_id"),
+            "asset_template_type": asset.get("asset_template_type"),
+            "asset_type": asset.get("asset_type"),
+        }
+    )
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("#### Ficha de observación")
+        if observations:
+            labels = [f"{item.get('record_uuid')} ({item.get('lpi_code') or '-'})" for item in observations]
+            selected_label = st.selectbox("Observations in visit", labels, key="legacy_a_observation")
+            record_uuid = selected_label.split(" (")[0]
+            selected_observation = next(
+                (item for item in observations if item.get("record_uuid") == record_uuid),
+                observations[0],
+            )
+        else:
+            selected_observation = {}
+            st.info("No observations found for this visit.")
+
+        current_lpi = str(selected_observation.get("lpi_code") or "")
+        lpi_index = lpi_options.index(current_lpi) if current_lpi in lpi_options else 0
+        st.selectbox(
+            "LPI code (official)",
+            options=lpi_options or [""],
+            index=lpi_index if lpi_options else 0,
+            disabled=True,
+            key="legacy_a_lpi",
+        )
+        severity = int(selected_observation.get("severity_0_5") or 0)
+        st.selectbox(
+            "Severity (0-5)",
+            options=[0, 1, 2, 3, 4, 5],
+            index=[0, 1, 2, 3, 4, 5].index(severity),
+            disabled=True,
+            key="legacy_a_severity",
+        )
+        min_photos = 3 if severity >= 3 else 1
+        st.info(f"Legacy auto rule: minimum photos required = {min_photos}")
+        st.text_area(
+            "Description",
+            value=str(selected_observation.get("observation_description") or ""),
+            height=140,
+            disabled=True,
+            key="legacy_a_description",
+        )
+        st.text_area(
+            "Coordinator notes",
+            value=str(selected_observation.get("coordinator_notes") or ""),
+            height=120,
+            disabled=True,
+            key="legacy_a_notes",
+        )
+
+    with right:
+        st.markdown("#### Photos for current visit")
+        st.metric("Registered photos", len(photos))
+        enough = len(photos) >= min_photos if observations else False
+        if observations:
+            if enough:
+                st.success(f"Legacy rule satisfied: {len(photos)}/{min_photos} photos.")
+            else:
+                st.warning(f"Legacy rule not satisfied: {len(photos)}/{min_photos} photos.")
+        st.dataframe(photos, use_container_width=True)
+        st.file_uploader(
+            "Upload photos (legacy flow preview)",
+            type=["jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            disabled=True,
+            key="legacy_a_uploader",
+        )
+        st.caption("Upload is disabled here. This panel is a visual recovery of the old operational layout.")
+
+
+def _render_legacy_panel_b(context: dict) -> None:
+    st.markdown("### Legacy Panel B — Structured Data Entry Panel")
+    st.caption("Recreated from `hrevn_panel_data_entry.py`. Shows the old staged flow: client -> asset -> visit -> observation -> photo -> emit S1.")
+
+    visit = context["selected_visit"] or {}
+    asset = context["selected_asset"] or {}
+    observations = context["selected_observations"]
+    photos = context["selected_photos"]
+
+    client_name = asset.get("client_name") or visit.get("client_name") or ""
+    client_id = f"CLI-{str(asset.get('asset_id') or '0000').split('-')[-1]}" if asset else "CLI-0000"
+
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        st.markdown("#### 1. Client")
+        st.text_input("client_id", value=client_id, disabled=True, key="legacy_b_client_id")
+        st.text_input("client_name", value=str(client_name), disabled=True, key="legacy_b_client_name")
+    with s2:
+        st.markdown("#### 2. Asset")
+        st.text_input("asset_id", value=str(asset.get("asset_id") or ""), disabled=True, key="legacy_b_asset_id")
+        st.text_input("asset_public_id", value=str(asset.get("asset_public_id") or ""), disabled=True, key="legacy_b_asset_public_id")
+        st.text_input("asset_template_type", value=str(asset.get("asset_template_type") or ""), disabled=True, key="legacy_b_asset_template_type")
+    with s3:
+        st.markdown("#### 3. Visit")
+        st.text_input("visit_id", value=str(visit.get("visit_id") or ""), disabled=True, key="legacy_b_visit_id")
+        st.text_input("visit_date_utc", value=str(visit.get("visit_date_utc") or ""), disabled=True, key="legacy_b_visit_date")
+        st.text_input("inspector_name", value=str(visit.get("inspector_name") or ""), disabled=True, key="legacy_b_inspector")
+
+    o1, o2 = st.columns(2)
+    with o1:
+        st.markdown("#### 4. Observation creation")
+        st.metric("Observations in selected visit", len(observations))
+        st.dataframe(observations, use_container_width=True)
+    with o2:
+        st.markdown("#### 5. Photo registration")
+        st.metric("Photos in selected visit", len(photos))
+        st.dataframe(photos, use_container_width=True)
+
+    st.markdown("#### 6. Emit S1")
+    st.write(
+        {
+            "emit_ready": bool(visit) and len(observations) > 0,
+            "legacy_expected_outputs": ["baseline_log", "visit_report", "certificate"],
+            "mode": "read_only_comparison",
+        }
+    )
+
+
+def _render_legacy_panel_c(context: dict) -> None:
+    st.markdown("### Legacy Panel C — Excel UI Panel v2")
+    st.caption("Recreated from `hrevn_make_ui_panel_v2.py`. This was a workbook-embedded lightweight capture sheet.")
+
+    visit = context["selected_visit"] or {}
+    observations = context["selected_observations"]
+    first_observation = observations[0] if observations else {}
+    lpi_display = str(first_observation.get("lpi_code") or "")
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        st.text_input("visit_id", value=str(visit.get("visit_id") or ""), disabled=True, key="legacy_c_visit_id")
+        st.text_input("LPI", value=lpi_display, disabled=True, key="legacy_c_lpi")
+        st.number_input(
+            "Severity (0-5)",
+            min_value=0,
+            max_value=5,
+            value=int(first_observation.get("severity_0_5") or 0),
+            disabled=True,
+            key="legacy_c_severity",
+        )
+    with c2:
+        st.text_area(
+            "Descripción",
+            value=str(first_observation.get("observation_description") or ""),
+            height=130,
+            disabled=True,
+            key="legacy_c_description",
+        )
+        photo_name = context["selected_photos"][0].get("photo_filename") if context["selected_photos"] else ""
+        st.text_input("photo_filename (optional)", value=str(photo_name or ""), disabled=True, key="legacy_c_photo_name")
+
+    st.write(
+        {
+            "lpi_code_auto": lpi_display,
+            "dirty_flag": 1 if visit or first_observation or photo_name else 0,
+            "panel_model": "excel_embedded_ui",
+        }
+    )
+
+
+def render_real_estate_vertical() -> None:
+    st.subheader("Real Estate Vertical")
+    st.caption("Working view over the Real Estate SQLite snapshot, plus recovered legacy panel comparisons.")
+
+    if not REAL_ESTATE_SQLITE_PATH.exists():
+        st.error("Real Estate SQLite snapshot not available.")
+        return
+
+    snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
+    visit_ids = [item.get("visit_id") for item in snapshot.visits if isinstance(item, dict) and item.get("visit_id")]
+    if not visit_ids:
+        st.warning("No visits available in the Real Estate snapshot.")
+        return
+
+    selected_visit = st.selectbox("Selected visit", options=visit_ids)
+    context = _prepare_real_estate_context(snapshot, selected_visit)
+
+    tab_overview, tab_a, tab_b, tab_c = st.tabs(
+        [
+            "Unified View",
+            "Legacy Panel A",
+            "Legacy Panel B",
+            "Legacy Panel C",
+        ]
+    )
+
+    with tab_overview:
+        _render_real_estate_overview(snapshot, selected_visit, context)
+    with tab_a:
+        _render_legacy_panel_a(context)
+    with tab_b:
+        _render_legacy_panel_b(context)
+    with tab_c:
+        _render_legacy_panel_c(context)
 
 
 def render_schema_explorer() -> None:
@@ -399,7 +620,7 @@ def main() -> None:
     st.set_page_config(page_title="HREVN Sandbox — Documentary Panels", layout="wide")
     st.title("HREVN UNIFIED V1 SANDBOX — Streamlit Panels")
     st.caption(
-        "Documentary-only UI. No real source access, no SQLite, no real data reads."
+        "Documentary-only UI. No real source access, no SQLite writes, no real data reads outside the bundled sandbox snapshot."
     )
 
     tab_re, tab_schema, tab_mapping, tab_dryrun = st.tabs(
