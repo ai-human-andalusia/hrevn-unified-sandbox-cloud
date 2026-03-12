@@ -2927,11 +2927,11 @@ def _render_real_estate_v2_builder() -> None:
             else:
                 filtered_demand_rows = demand_rows
 
-            selected_link_id = st.session_state.get("re_v2_asset_demand_selected_link_id")
+            selected_enterprise_id = st.session_state.get("re_v2_asset_demand_selected_enterprise_id")
             table_rows = []
             for row in filtered_demand_rows:
                 table_rows.append({
-                    "OPEN": row.get("link_id") == selected_link_id,
+                    "OPEN": row.get("enterprise_id") == selected_enterprise_id,
                     "ENTERPRISE": row.get("enterprise_name", ""),
                     "PROPERTY / USER": row.get("property_or_user", ""),
                     "USER REF": row.get("user_reference", ""),
@@ -2939,7 +2939,7 @@ def _render_real_estate_v2_builder() -> None:
                     "ASSET REF": row.get("asset_public_id", ""),
                     "EVENTS": int(row.get("event_visit_count") or 0),
                     "CERTIFICATES": int(row.get("certificate_count") or 0),
-                    "_LINK_ID": row.get("link_id"),
+                    "_ENTERPRISE_ID": row.get("enterprise_id"),
                 })
 
             if table_rows:
@@ -2951,62 +2951,67 @@ def _render_real_estate_v2_builder() -> None:
                     key="re_v2_asset_demands_editor",
                     column_config={
                         "OPEN": st.column_config.CheckboxColumn(required=False),
-                        "_LINK_ID": None,
+                        "_ENTERPRISE_ID": None,
                     },
-                    disabled=["ENTERPRISE", "PROPERTY / USER", "USER REF", "ASSET", "ASSET REF", "EVENTS", "CERTIFICATES", "_LINK_ID"],
+                    disabled=["ENTERPRISE", "PROPERTY / USER", "USER REF", "ASSET", "ASSET REF", "EVENTS", "CERTIFICATES", "_ENTERPRISE_ID"],
                 )
                 open_rows = edited_df[edited_df["OPEN"] == True]
                 if not open_rows.empty:
-                    chosen_link_id = str(open_rows.iloc[-1]["_LINK_ID"])
-                    if chosen_link_id != selected_link_id:
-                        st.session_state["re_v2_asset_demand_selected_link_id"] = chosen_link_id
+                    chosen_enterprise_id = str(open_rows.iloc[-1]["_ENTERPRISE_ID"])
+                    if chosen_enterprise_id != selected_enterprise_id:
+                        st.session_state["re_v2_asset_demand_selected_enterprise_id"] = chosen_enterprise_id
                         st.rerun()
-                elif selected_link_id and selected_link_id not in {row.get("link_id") for row in filtered_demand_rows}:
-                    st.session_state.pop("re_v2_asset_demand_selected_link_id", None)
+                elif selected_enterprise_id and selected_enterprise_id not in {row.get("enterprise_id") for row in filtered_demand_rows}:
+                    st.session_state.pop("re_v2_asset_demand_selected_enterprise_id", None)
                     st.rerun()
 
-                selected_row = next((row for row in filtered_demand_rows if row.get("link_id") == st.session_state.get("re_v2_asset_demand_selected_link_id")), None)
-                if not selected_row:
-                    selected_row = filtered_demand_rows[0]
-                    st.session_state["re_v2_asset_demand_selected_link_id"] = selected_row.get("link_id")
+                selected_enterprise_id = st.session_state.get("re_v2_asset_demand_selected_enterprise_id")
+                selected_rows = [row for row in filtered_demand_rows if row.get("enterprise_id") == selected_enterprise_id]
+                if not selected_rows:
+                    selected_rows = [row for row in filtered_demand_rows if row.get("enterprise_id")] 
+                    if selected_rows:
+                        st.session_state["re_v2_asset_demand_selected_enterprise_id"] = selected_rows[0].get("enterprise_id")
+                        selected_enterprise_id = selected_rows[0].get("enterprise_id")
+                        selected_rows = [row for row in filtered_demand_rows if row.get("enterprise_id") == selected_enterprise_id]
 
-                if selected_row:
-                    enterprise_label = str(selected_row.get("enterprise_name") or "Enterprise")
-                    user_label = str(selected_row.get("property_or_user") or "User")
-                    user_ref = str(selected_row.get("user_reference") or "-")
-                    asset_label = str(selected_row.get("asset_name") or "Asset")
-                    asset_ref = str(selected_row.get("asset_public_id") or "-")
-                    visits = int(selected_row.get("event_visit_count") or 0)
-                    certs = int(selected_row.get("certificate_count") or 0)
+                if selected_rows:
+                    enterprise_label = str(selected_rows[0].get("enterprise_name") or "Enterprise")
+                    users_html = "".join(
+                        f"<div style='background:#ffffff;border:1px solid #bbf7d0;border-radius:10px;padding:10px;margin-top:8px;'><div style='font-family:Menlo,Monaco,monospace;font-size:14px;font-weight:700;color:#0f172a;'>{row.get('property_or_user','')}</div><div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;'>Reference: {row.get('user_reference') or '-'}</div></div>"
+                        for row in selected_rows
+                    )
+                    assets_html = "".join(
+                        f"<div style='background:#ffffff;border:1px solid #fde68a;border-radius:10px;padding:10px;margin-top:8px;'><div style='font-family:Menlo,Monaco,monospace;font-size:14px;font-weight:700;color:#0f172a;'>{row.get('asset_name','')}</div><div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;'>Reference: {row.get('asset_public_id') or '-'}</div><div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#475569;margin-top:4px;'>Events: {int(row.get('event_visit_count') or 0)} | Certificates: {int(row.get('certificate_count') or 0)}</div></div>"
+                        for row in selected_rows
+                    )
+                    total_events = sum(int(row.get("event_visit_count") or 0) for row in selected_rows)
+                    total_certs = sum(int(row.get("certificate_count") or 0) for row in selected_rows)
                     relationship_html = f"""
                     <div style='width:100%;margin-top:14px;border:1px solid #d8e1e8;border-radius:14px;background:#ffffff;padding:16px;'>
-                      <div style='display:flex;flex-wrap:wrap;gap:14px;align-items:stretch;justify-content:space-between;'>
+                      <div style='display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;justify-content:space-between;'>
                         <div style='flex:1 1 220px;min-width:220px;background:#dbeafe;border:1px solid #93c5fd;border-radius:12px;padding:14px;'>
                           <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#1e3a8a;'>Enterprise</div>
                           <div style='font-family:Menlo,Monaco,monospace;font-size:18px;font-weight:700;color:#0f172a;margin-top:8px;'>{enterprise_label}</div>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;margin-top:8px;'>Branches shown: {len(selected_rows)}</div>
                         </div>
-                        <div style='flex:0 0 60px;display:flex;align-items:center;justify-content:center;font-size:26px;color:#64748b;'>→</div>
-                        <div style='flex:1 1 220px;min-width:220px;background:#dcfce7;border:1px solid #86efac;border-radius:12px;padding:14px;'>
-                          <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#166534;'>Assigned user</div>
-                          <div style='font-family:Menlo,Monaco,monospace;font-size:16px;font-weight:700;color:#0f172a;margin-top:8px;'>{user_label}</div>
-                          <div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;margin-top:6px;'>Reference: {user_ref}</div>
+                        <div style='flex:1 1 260px;min-width:260px;background:#dcfce7;border:1px solid #86efac;border-radius:12px;padding:14px;'>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#166534;'>Assigned users</div>
+                          {users_html}
                         </div>
-                        <div style='flex:0 0 60px;display:flex;align-items:center;justify-content:center;font-size:26px;color:#64748b;'>→</div>
-                        <div style='flex:1 1 240px;min-width:240px;background:#fef3c7;border:1px solid #fcd34d;border-radius:12px;padding:14px;'>
-                          <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#92400e;'>Assigned asset</div>
-                          <div style='font-family:Menlo,Monaco,monospace;font-size:16px;font-weight:700;color:#0f172a;margin-top:8px;'>{asset_label}</div>
-                          <div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;margin-top:6px;'>Reference: {asset_ref}</div>
+                        <div style='flex:1 1 280px;min-width:280px;background:#fef3c7;border:1px solid #fcd34d;border-radius:12px;padding:14px;'>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#92400e;'>Assigned assets</div>
+                          {assets_html}
                         </div>
                         <div style='flex:1 1 200px;min-width:200px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:12px;padding:14px;'>
                           <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#334155;'>Operational summary</div>
                           <div style='display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;'>
                             <div style='flex:1 1 90px;background:#ffffff;border:1px solid #d8e1e8;border-radius:10px;padding:10px;'>
                               <div style='font-family:Menlo,Monaco,monospace;font-size:11px;color:#475569;text-transform:uppercase;'>Events</div>
-                              <div style='font-family:Menlo,Monaco,monospace;font-size:22px;font-weight:700;color:#0f172a;'>{visits}</div>
+                              <div style='font-family:Menlo,Monaco,monospace;font-size:22px;font-weight:700;color:#0f172a;'>{total_events}</div>
                             </div>
                             <div style='flex:1 1 90px;background:#ffffff;border:1px solid #d8e1e8;border-radius:10px;padding:10px;'>
                               <div style='font-family:Menlo,Monaco,monospace;font-size:11px;color:#475569;text-transform:uppercase;'>Certificates</div>
-                              <div style='font-family:Menlo,Monaco,monospace;font-size:22px;font-weight:700;color:#0f172a;'>{certs}</div>
+                              <div style='font-family:Menlo,Monaco,monospace;font-size:22px;font-weight:700;color:#0f172a;'>{total_certs}</div>
                             </div>
                           </div>
                         </div>
