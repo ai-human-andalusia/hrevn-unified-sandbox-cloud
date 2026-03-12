@@ -64,6 +64,16 @@ from common.services.real_estate_sqlite import (
 )
 from common.services.real_estate_ai_review import review_real_estate_certification
 from common.services.rwa_v1_schema import ensure_rwa_v1_schema
+from common.services.rwa_v1_store import (
+    RWA_ASSET_CATEGORIES,
+    create_rwa_v1_observation,
+    create_rwa_v1_visit,
+    ensure_rwa_v1_demo_seed,
+    list_rwa_v1_assets,
+    list_rwa_v1_observations_raw,
+    list_rwa_v1_photos_raw,
+    list_rwa_v1_visits_raw,
+)
 
 from common.services.real_estate_v2_store import (
     create_re_v2_account,
@@ -2340,8 +2350,38 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
         st.caption("Upload is disabled here. This panel is a visual recovery of the old operational layout.")
 
 
+def _resolve_rwa_lpi_options_for_category(asset_category: str) -> list[str]:
+    try:
+        snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
+        lpi_dictionary = snapshot.lpi_dictionary
+    except Exception:
+        return [""]
+
+    group_map = {
+        "residential": "BUILDING_STANDARD",
+        "tertiary": "BUILDING_STANDARD",
+        "industrial": "BUILDING_STANDARD",
+        "urban_land": "LAND_URBAN",
+        "rural_land": "LAND_RUSTIC",
+        "rustic_land": "LAND_RUSTIC",
+    }
+    target_group = group_map.get(str(asset_category or '').strip().lower(), 'BUILDING_STANDARD')
+    filtered = [
+        item for item in lpi_dictionary
+        if str(item.get('lpi_group') or '').strip().upper() == target_group
+    ]
+    labels = [
+        f"{str(item.get('lpi_code') or '').strip()} | {str(item.get('lpi_title') or '').strip()}"
+        for item in filtered
+        if str(item.get('lpi_code') or '').strip()
+    ]
+    return labels or [""]
+
+
 def _render_rwa_placeholder() -> None:
     ensure_rwa_v1_schema()
+    ensure_rwa_v1_demo_seed()
+
     mode_key = "rwa_mode"
     asset_key = "rwa_asset"
     asset_selectbox_key = "rwa_asset_selectbox"
@@ -2357,7 +2397,32 @@ def _render_rwa_placeholder() -> None:
     if observation_draft_key not in st.session_state:
         st.session_state[observation_draft_key] = ""
 
-    asset_labels = ["Select asset"]
+    all_assets = list_rwa_v1_assets()
+    all_visits = list_rwa_v1_visits_raw()
+    all_observations = list_rwa_v1_observations_raw()
+    all_photos = list_rwa_v1_photos_raw()
+
+    asset_options = {"Select asset": ""}
+    asset_options.update(
+        {
+            f"{item.get('asset_name') or item.get('asset_public_id') or item.get('asset_id')} ({item.get('asset_public_id') or item.get('asset_id')})": str(item.get('asset_id') or '')
+            for item in all_assets if item.get('asset_id')
+        }
+    )
+    asset_labels = list(asset_options.keys())
+
+    def _build_visit_draft_id(asset_id: str) -> str:
+        asset_visits = [item for item in all_visits if str(item.get('asset_id') or '') == asset_id]
+        next_visit_number = len(asset_visits) + 1 if asset_id else 0
+        return f"RWA-VIS-{asset_id}-{next_visit_number:03d}" if asset_id else ""
+
+    def _build_observation_draft_id(visit_id: str) -> str:
+        visit_observations = [item for item in all_observations if str(item.get('visit_id') or '') == visit_id]
+        next_observation_number = len(visit_observations) + 1 if visit_id else 0
+        return f"RWA-OBS-{visit_id}-{next_observation_number:03d}" if visit_id else ""
+
+    current_asset_id = st.session_state.get(asset_key, "")
+    current_asset_label = next((label for label, value in asset_options.items() if value == current_asset_id), asset_labels[0])
 
     left, right = st.columns(2)
     with left:
@@ -2371,67 +2436,116 @@ def _render_rwa_placeholder() -> None:
             st.rerun()
         if action_right.button("Nueva observación", key="rwa_new_observation", use_container_width=True):
             st.session_state[mode_key] = "new_observation"
-            if st.session_state.get(visit_draft_key):
-                st.session_state[observation_draft_key] = f"ROB-DRAFT-{st.session_state.get(visit_draft_key)}-001"
+            asset_id_for_observation = st.session_state.get(asset_key, "")
+            if asset_id_for_observation and not st.session_state.get(visit_draft_key):
+                st.session_state[visit_draft_key] = _build_visit_draft_id(asset_id_for_observation)
+            st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state.get(visit_draft_key, ""))
             st.rerun()
 
         field_a, field_b = st.columns(2)
         with field_a:
-            st.selectbox(
+            chosen_asset_label = st.selectbox(
                 "Asset",
                 asset_labels,
-                index=0,
+                index=asset_labels.index(current_asset_label) if current_asset_label in asset_labels else 0,
                 key=asset_selectbox_key,
-                disabled=True,
             )
-        with field_b:
-            st.text_input("Número de visita", value=st.session_state.get(visit_draft_key, ""), disabled=True)
+            chosen_asset_id = asset_options[chosen_asset_label]
+            previous_asset_id = st.session_state.get(asset_key, "")
+            st.session_state[asset_key] = chosen_asset_id
+            if chosen_asset_id != previous_asset_id:
+                st.session_state[visit_draft_key] = _build_visit_draft_id(chosen_asset_id)
+                if st.session_state.get(mode_key) == "new_observation":
+                    st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state[visit_draft_key])
+                else:
+                    st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state[visit_draft_key])
 
-        observation_display = st.session_state.get(observation_draft_key, "") if st.session_state.get(mode_key) == "new_observation" else ""
+        current_asset_id = st.session_state.get(asset_key, "")
+        current_asset_row = next((item for item in all_assets if str(item.get('asset_id') or '') == current_asset_id), None)
+        display_visit_id = st.session_state.get(visit_draft_key, "")
+        with field_b:
+            st.text_input("Número de visita", value=display_visit_id, disabled=True)
+
+        observation_display = st.session_state.get(observation_draft_key, "")
         st.text_input("Número de observación", value=observation_display, disabled=True)
-        st.selectbox(
+
+        current_asset_category = str(current_asset_row.get('asset_type') or '') if current_asset_row else ''
+        asset_lpi_options = _resolve_rwa_lpi_options_for_category(current_asset_category)
+        selected_lpi = st.selectbox(
             "LPI code (official)",
-            options=[""],
+            options=asset_lpi_options,
             index=0,
-            disabled=True,
+            disabled=not bool(current_asset_row),
             key="rwa_lpi",
         )
-        st.selectbox(
+        severity = st.selectbox(
             "Severity (0-5)",
             options=[0, 1, 2, 3, 4, 5],
             index=0,
-            disabled=True,
             key="rwa_severity",
         )
-        st.info("RWA data model pending. This form is now reserved for the future RWA SQLite flow.")
-        st.text_area(
+        min_photos = 3 if int(severity) >= 3 else 1
+        uploaded_files = st.file_uploader(
+            "Upload photos",
+            type=["jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            key="rwa_uploader",
+        )
+        uploaded_count = len(uploaded_files or [])
+        if uploaded_count >= min_photos:
+            st.success(f"Photos: {uploaded_count}/{min_photos}")
+        else:
+            st.error(f"Photos: {uploaded_count}/{min_photos} (minimum required)")
+        observation_description = st.text_area(
             "Description",
             value="",
             height=140,
-            disabled=True,
             key="rwa_description",
         )
-        st.text_area(
+        coordinator_notes = st.text_area(
             "Coordinator notes",
             value="",
             height=120,
-            disabled=True,
             key="rwa_notes",
         )
+        if st.button("Guardar observación", type="primary", key="rwa_save_observation", use_container_width=True):
+            if not current_asset_id:
+                st.warning("Select an asset first.")
+            elif not display_visit_id:
+                st.warning("The visit id could not be generated yet.")
+            elif not observation_display:
+                st.warning("The observation id could not be generated yet.")
+            elif uploaded_count < min_photos:
+                st.warning(f"You must upload at least {min_photos} photo(s) before saving this observation.")
+            else:
+                create_rwa_v1_visit(
+                    asset_id=current_asset_id,
+                    visit_id=display_visit_id,
+                    visit_data={"created_from": "rwa_intake_panel", "asset_category": current_asset_category},
+                )
+                create_rwa_v1_observation(
+                    observation_id=observation_display,
+                    visit_id=display_visit_id,
+                    asset_id=current_asset_id,
+                    lpi_code=(selected_lpi.split('|')[0].strip() if selected_lpi else ''),
+                    severity_0_5=int(severity),
+                    observation_description=observation_description,
+                    coordinator_notes=coordinator_notes,
+                    uploaded_files=uploaded_files or [],
+                )
+                st.success(f"Observation saved: {observation_display}")
+                st.session_state[observation_draft_key] = _build_observation_draft_id(display_visit_id)
+                st.rerun()
 
     with right:
         st.markdown("#### Photos for current visit")
-        st.metric("Registered photos", 0)
-        st.info("No RWA photos registered yet.")
-        st.dataframe([], use_container_width=True)
-        st.file_uploader(
-            "Upload photos (RWA preview)",
-            type=["jpg", "jpeg", "png"],
-            accept_multiple_files=True,
-            disabled=True,
-            key="rwa_uploader",
-        )
-        st.caption("This RWA panel now uses the Legacy A skeleton only as interface structure. Data and SQLite flow will be defined separately from Real Estate.")
+        current_visit_photos = [item for item in all_photos if str(item.get('visit_id') or '') == display_visit_id]
+        st.metric("Registered photos", len(current_visit_photos))
+        if current_visit_photos:
+            st.dataframe(current_visit_photos, use_container_width=True, hide_index=True)
+        else:
+            st.info("No RWA photos registered for this visit yet.")
+        st.caption("RWA now uses its own SQLite foundation. This intake flow is no longer tied to Real Estate.")
 
 
 def _render_legacy_panel_b(context: dict) -> None:
