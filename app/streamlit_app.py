@@ -249,6 +249,86 @@ def _secret_int(key: str, default: int) -> int:
         return default
 
 
+_I18N = {
+    "en": {
+        "admin_space": "Admin space",
+        "central_console": "Central Console",
+        "access_security": "Access & Security",
+        "verticals": "Verticals",
+        "communications": "Communications",
+        "real_estate": "Real Estate",
+        "gov_photovoltaic": "GOV / Photovoltaic",
+        "graphic_evidence": "Graphic Evidence",
+        "genius_operations": "GENIUS Operations",
+        "agent_operations": "Agent Operations",
+        "email": "Email",
+        "telegram": "Telegram",
+        "access_shell_title": "HREVN Unified V1 — Access Shell",
+        "access_shell_caption": "Documentary-safe access shell for the unified pilot. No real source access is enabled here.",
+        "interface_language": "Interface language",
+        "tab_login": "Login",
+        "tab_register": "Register",
+        "tab_verify": "Verify Email",
+        "tab_recovery": "Password Recovery",
+        "field_email": "Email",
+        "field_password": "Password",
+        "field_recovery_email": "Recovery email (optional)",
+        "field_preferred_language": _t("field_preferred_language"),
+        "field_confirm_password": "Confirm password",
+        "button_access_workspace": "Access workspace",
+        "button_demo_mode": "Continue in documentary demo mode",
+        "button_create_account": "Create account",
+        "button_verify_account": "Verify account",
+        "field_verification_token": "Verification token",
+        "production": "Production",
+        "technical_architecture": "Technical Architecture",
+    },
+    "es": {
+        "admin_space": "Espacio admin",
+        "central_console": "Consola central",
+        "access_security": "Acceso y seguridad",
+        "verticals": "Verticales",
+        "communications": "Comunicaciones",
+        "real_estate": "Real Estate",
+        "gov_photovoltaic": "GOV / Fotovoltaica",
+        "graphic_evidence": "Evidencia gráfica",
+        "genius_operations": "Operaciones GENIUS",
+        "agent_operations": "Operaciones de agentes",
+        "email": "Correo",
+        "telegram": "Telegram",
+        "access_shell_title": "HREVN Unified V1 — Acceso",
+        "access_shell_caption": "Capa de acceso segura para el piloto unificado. No hay acceso real a sistemas fuente en esta vista.",
+        "interface_language": "Idioma de la interfaz",
+        "tab_login": "Login",
+        "tab_register": "Registro",
+        "tab_verify": "Verificar email",
+        "tab_recovery": "Recuperar contraseña",
+        "field_email": "Correo electrónico",
+        "field_password": "Contraseña",
+        "field_recovery_email": "Correo de recuperación (opcional)",
+        "field_preferred_language": "Idioma preferido",
+        "field_confirm_password": "Confirmar contraseña",
+        "button_access_workspace": "Entrar al workspace",
+        "button_demo_mode": "Continuar en modo demo documental",
+        "button_create_account": "Crear cuenta",
+        "button_verify_account": "Verificar cuenta",
+        "field_verification_token": "Token de verificación",
+        "production": "Producción",
+        "technical_architecture": "Arquitectura técnica",
+    },
+}
+
+
+def _lang() -> str:
+    current = str(st.session_state.get("auth_language") or _secret_value("SANDBOX_DEFAULT_LANGUAGE", "en") or "en").strip().lower()
+    return current if current in _I18N else "en"
+
+
+def _t(key: str) -> str:
+    lang = _lang()
+    return _I18N.get(lang, _I18N["en"]).get(key, _I18N["en"].get(key, key))
+
+
 
 def _openai_api_key_for(scope: str = "production") -> str:
     scope = (scope or "production").strip().lower()
@@ -584,37 +664,51 @@ def _render_auth_shell() -> None:
         if active_session_id:
             touch_auth_session(AUTH_ACCESS_SQLITE_PATH, active_session_id)
         if st.session_state.get("auth_role") == "admin":
-            st.sidebar.markdown("### Admin space")
-            if st.sidebar.button("Central Console", use_container_width=True):
+            st.sidebar.markdown(f"### {_t("admin_space")}")
+            if st.sidebar.button(_t("central_console"), use_container_width=True):
                 st.session_state["main_tab_target"] = "central_console"
                 st.rerun()
-            if st.sidebar.button("Access & Security", use_container_width=True):
+            if st.sidebar.button(_t("access_security"), use_container_width=True):
                 st.session_state["main_tab_target"] = "access_security"
                 st.rerun()
-            st.sidebar.markdown("#### Verticals")
-            st.sidebar.button("Real Estate", disabled=True, use_container_width=True)
-            st.sidebar.button("GOV / Photovoltaic", disabled=True, use_container_width=True)
-            st.sidebar.button("Graphic Evidence", disabled=True, use_container_width=True)
-            st.sidebar.button("GENIUS Operations", disabled=True, use_container_width=True)
-            if st.sidebar.button("Agent Operations", use_container_width=True):
+            st.sidebar.markdown(f"#### {_t("verticals")}")
+            st.sidebar.button(_t("real_estate"), disabled=True, use_container_width=True)
+            st.sidebar.button(_t("gov_photovoltaic"), disabled=True, use_container_width=True)
+            st.sidebar.button(_t("graphic_evidence"), disabled=True, use_container_width=True)
+            st.sidebar.button(_t("genius_operations"), disabled=True, use_container_width=True)
+            if st.sidebar.button(_t("agent_operations"), use_container_width=True):
                 st.session_state["main_tab_target"] = "agent_operations"
                 st.rerun()
-            st.sidebar.markdown("#### Communications")
-            st.sidebar.button("Email", disabled=True, use_container_width=True)
-            st.sidebar.button("Telegram", disabled=True, use_container_width=True)
+            st.sidebar.markdown(f"#### {_t("communications")}")
+            st.sidebar.button(_t("email"), disabled=True, use_container_width=True)
+            st.sidebar.button(_t("telegram"), disabled=True, use_container_width=True)
         return
 
-    st.title("HREVN Unified V1 — Access Shell")
-    st.caption("Documentary-safe access shell for the unified pilot. No real source access is enabled here.")
+    language_left, _language_spacer = st.columns([0.4, 0.6])
+    with language_left:
+        current_language = _lang()
+        selected_ui_language = st.selectbox(
+            _t("interface_language"),
+            options=["en", "es"],
+            index=0 if current_language == "en" else 1,
+            format_func=lambda value: {"en": "English", "es": "Español"}.get(value, value),
+            key="access_shell_language_selector",
+        )
+        if selected_ui_language != current_language:
+            st.session_state["auth_language"] = selected_ui_language
+            st.rerun()
 
-    login_tab, signup_tab, verify_tab, recovery_tab = st.tabs(["Login", "Register", "Verify Email", "Password Recovery"])
+    st.title(_t("access_shell_title"))
+    st.caption(_t("access_shell_caption"))
+
+    login_tab, signup_tab, verify_tab, recovery_tab = st.tabs([_t("tab_login"), _t("tab_register"), _t("tab_verify"), _t("tab_recovery")])
 
     with login_tab:
         left, right = st.columns([1.1, 0.9])
         with left:
-            email = st.text_input("Email", key="login_email")
-            password = st.text_input("Password", type="password", key="login_password")
-            if st.button("Access workspace", type="primary"):
+            email = st.text_input(_t("field_email"), key="login_email")
+            password = st.text_input(_t("field_password"), type="password", key="login_password")
+            if st.button(_t("button_access_workspace"), type="primary"):
                 context = _get_auth_request_context()
                 ip_record = get_ip_control_record(AUTH_ACCESS_SQLITE_PATH, context.ip_public)
                 if ip_is_blocked(ip_record):
@@ -802,7 +896,7 @@ def _render_auth_shell() -> None:
                     st.warning("Auth shell is not fully configured yet. Use documentary demo access below.")
 
             if (not cfg.auth_enabled) or (not cfg.has_configured_accounts):
-                if st.button("Continue in documentary demo mode"):
+                if st.button(_t("button_demo_mode")):
                     context = _get_auth_request_context()
                     if get_account_status(AUTH_ACCESS_SQLITE_PATH, "demo@hrevn.local") != "active":
                         st.error("Demo access is currently blocked.")
@@ -859,17 +953,17 @@ def _render_auth_shell() -> None:
     with signup_tab:
         signup_left, signup_right = st.columns([1.1, 0.9])
         with signup_left:
-            register_email = st.text_input("Email", key="register_email")
-            register_recovery = st.text_input("Recovery email (optional)", key="register_recovery_email")
+            register_email = st.text_input(_t("field_email"), key="register_email")
+            register_recovery = st.text_input(_t("field_recovery_email"), key="register_recovery_email")
             register_language = st.selectbox(
-                "Preferred language",
+                _t("field_preferred_language"),
                 options=["en", "es"],
                 format_func=lambda value: {"en": "English", "es": "Español"}.get(value, value),
                 key="register_preferred_language",
             )
-            register_password = st.text_input("Password", type="password", key="register_password")
-            register_password_2 = st.text_input("Confirm password", type="password", key="register_password_confirm")
-            if st.button("Create account", type="primary"):
+            register_password = st.text_input(_t("field_password"), type="password", key="register_password")
+            register_password_2 = st.text_input(_t("field_confirm_password"), type="password", key="register_password_confirm")
+            if st.button(_t("button_create_account"), type="primary"):
                 context = _get_auth_request_context()
                 email_value = register_email.strip().lower()
                 recovery_value = register_recovery.strip().lower()
@@ -942,9 +1036,9 @@ def _render_auth_shell() -> None:
     with verify_tab:
         verify_left, verify_right = st.columns([1.1, 0.9])
         with verify_left:
-            verify_email = st.text_input("Email", key="verify_email")
-            verify_token = st.text_input("Verification token", key="verify_token")
-            if st.button("Verify account", type="primary"):
+            verify_email = st.text_input(_t("field_email"), key="verify_email")
+            verify_token = st.text_input(_t("field_verification_token"), key="verify_token")
+            if st.button(_t("button_verify_account"), type="primary"):
                 context = _get_auth_request_context()
                 verified = verify_email_token(
                     AUTH_ACCESS_SQLITE_PATH,
@@ -1587,7 +1681,7 @@ def render_central_console() -> None:
         unsafe_allow_html=True,
     )
 
-    production_tab, technical_tab = st.tabs(["Production", "Technical Architecture"])
+    production_tab, technical_tab = st.tabs([_t("production"), _t("technical_architecture")])
 
     with production_tab:
         real_estate_snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
