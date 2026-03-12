@@ -677,21 +677,27 @@ def _render_auth_shell() -> None:
                 st.session_state["main_tab_target"] = "access_security"
                 st.rerun()
             st.sidebar.markdown(f"#### {_t("verticals")}")
-            if st.sidebar.button(_t("real_estate"), use_container_width=True):
-                st.session_state["main_tab_target"] = "real_estate"
-                st.rerun()
-            if st.sidebar.button(_t("gov_photovoltaic"), use_container_width=True):
-                st.session_state["main_tab_target"] = "gov_photovoltaic"
-                st.rerun()
-            if st.sidebar.button(_t("graphic_evidence"), use_container_width=True):
-                st.session_state["main_tab_target"] = "graphic_evidence"
-                st.rerun()
-            if st.sidebar.button(_t("genius_operations"), use_container_width=True):
-                st.session_state["main_tab_target"] = "genius_operations"
-                st.rerun()
-            if st.sidebar.button(_t("agent_operations"), use_container_width=True):
-                st.session_state["main_tab_target"] = "agent_operations"
-                st.rerun()
+            human_verticals = st.sidebar.container(border=True)
+            with human_verticals:
+                st.markdown("<div style='background:#dbeafe;color:#0f172a;border-radius:10px;padding:8px 10px;margin-bottom:8px;font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase'>Human verticals</div>", unsafe_allow_html=True)
+                if st.button(_t("real_estate"), use_container_width=True, key="sidebar_real_estate"):
+                    st.session_state["main_tab_target"] = "real_estate"
+                    st.rerun()
+                if st.button(_t("gov_photovoltaic"), use_container_width=True, key="sidebar_gov"):
+                    st.session_state["main_tab_target"] = "gov_photovoltaic"
+                    st.rerun()
+                if st.button(_t("graphic_evidence"), use_container_width=True, key="sidebar_graphic"):
+                    st.session_state["main_tab_target"] = "graphic_evidence"
+                    st.rerun()
+            system_verticals = st.sidebar.container(border=True)
+            with system_verticals:
+                st.markdown("<div style='background:#ede9fe;color:#1f2937;border-radius:10px;padding:8px 10px;margin-bottom:8px;font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase'>System verticals</div>", unsafe_allow_html=True)
+                if st.button(_t("genius_operations"), use_container_width=True, key="sidebar_genius"):
+                    st.session_state["main_tab_target"] = "genius_operations"
+                    st.rerun()
+                if st.button(_t("agent_operations"), use_container_width=True, key="sidebar_agent_ops"):
+                    st.session_state["main_tab_target"] = "agent_operations"
+                    st.rerun()
             st.sidebar.markdown(f"#### {_t("communications")}")
             if st.sidebar.button(_t("email"), use_container_width=True):
                 st.session_state["main_tab_target"] = "email"
@@ -2619,10 +2625,74 @@ def render_controlled_actions_vertical() -> None:
         else:
             st.error("Operation rejected. Rejection record sealed.")
 
-def render_real_estate_vertical() -> None:
-    st.subheader("Real Estate Vertical")
-    st.caption("Pilot workspace over the Real Estate SQLite snapshot, with improved operator view and legacy references.")
+def _render_real_estate_user_avatar(context: dict, workspace, readiness: RealEstateReadiness) -> None:
+    st.dataframe([
+        {"VIEW": "User avatar", "STATE": "individual customer"},
+        {"ASSET": context.get("asset_public_id") or context.get("asset_id") or "-", "VISIT": context.get("visit_id") or "-"},
+        {"ISSUANCE READY": "yes" if readiness.issuance_ready else "no", "IN REVIEW": "yes" if not readiness.issuance_ready else "no"},
+    ], use_container_width=True, hide_index=True)
+    left, right = st.columns([1.1, 0.9])
+    with left:
+        _render_panel_section_title("My visits")
+        st.dataframe([
+            {
+                "VISIT": context.get("visit_id") or "-",
+                "ASSET": context.get("asset_public_id") or context.get("asset_id") or "-",
+                "OBS": readiness.observation_count,
+                "PHOTOS": readiness.photo_count,
+                "STATUS": "Ready" if readiness.issuance_ready else "In review",
+            }
+        ], use_container_width=True, hide_index=True)
+    with right:
+        _render_panel_section_title("My delivery")
+        st.dataframe([
+            {"ARTIFACT": "Certificate", "STATE": "available" if readiness.already_issued else "pending"},
+            {"ARTIFACT": "ZIP package", "STATE": "available" if readiness.already_issued else "pending"},
+            {"ARTIFACT": "Verification", "STATE": "available" if readiness.already_issued else "pending"},
+        ], use_container_width=True, hide_index=True)
 
+
+def _render_real_estate_enterprise_avatar(snapshot, context: dict, workspace, readiness: RealEstateReadiness) -> None:
+    total_visits = len(snapshot.visits)
+    total_assets = len(snapshot.assets)
+    issued_visits = 1 if readiness.already_issued else 0
+    in_review = 0 if readiness.issuance_ready else 1
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("PORTFOLIO ASSETS", total_assets)
+    c2.metric("VISITS", total_visits)
+    c3.metric("ISSUED", issued_visits)
+    c4.metric("IN REVIEW", in_review)
+    left, right = st.columns([1.15, 0.85])
+    with left:
+        _render_panel_section_title("Enterprise account")
+        st.dataframe([
+            {
+                "ACCOUNT": "Enterprise avatar",
+                "CURRENT ASSET": context.get("asset_public_id") or context.get("asset_id") or "-",
+                "CURRENT VISIT": context.get("visit_id") or "-",
+                "STATUS": "Ready" if readiness.issuance_ready else "In review",
+            }
+        ], use_container_width=True, hide_index=True)
+        _render_panel_section_title("Portfolio visits")
+        visit_rows = []
+        for row in snapshot.visits[:8]:
+            visit_rows.append({
+                "VISIT": row.get("visit_id") or "-",
+                "ASSET": row.get("asset_public_id") or row.get("asset_id") or "-",
+                "DATE": row.get("visit_date_utc") or row.get("inspection_date_utc") or "-",
+            })
+        st.dataframe(visit_rows, use_container_width=True, hide_index=True)
+    with right:
+        _render_panel_section_title("Enterprise delivery")
+        st.dataframe([
+            {"CHANNEL": "Certificates", "COUNT": issued_visits},
+            {"CHANNEL": "ZIP packages", "COUNT": issued_visits},
+            {"CHANNEL": "Verifications", "COUNT": issued_visits},
+            {"CHANNEL": "Review backlog", "COUNT": in_review},
+        ], use_container_width=True, hide_index=True)
+
+
+def render_real_estate_vertical() -> None:
     if not REAL_ESTATE_SQLITE_PATH.exists():
         st.error("Real Estate SQLite snapshot not available.")
         return
@@ -2639,26 +2709,34 @@ def render_real_estate_vertical() -> None:
     workspace = build_real_estate_workspace(snapshot, selected_visit)
     readiness = _build_real_estate_readiness(context, workspace)
 
-    tab_overview, tab_workspace, tab_a, tab_b, tab_c = st.tabs(
-        [
-            "Overview",
-            "Workspace",
-            "Legacy A",
-            "Legacy B",
-            "Legacy C",
-        ]
-    )
+    admin_tab, user_tab, enterprise_tab = st.tabs(["Admin", "User", "Enterprise"])
 
-    with tab_overview:
-        _render_real_estate_overview(snapshot, context, readiness)
-    with tab_workspace:
-        _render_real_estate_workspace(snapshot, context, workspace, readiness, cfg)
-    with tab_a:
-        _render_legacy_panel_a(context)
-    with tab_b:
-        _render_legacy_panel_b(context)
-    with tab_c:
-        _render_legacy_panel_c(context)
+    with admin_tab:
+        tab_overview, tab_workspace, tab_a, tab_b, tab_c = st.tabs(
+            [
+                "Overview",
+                "Workspace",
+                "Legacy A",
+                "Legacy B",
+                "Legacy C",
+            ]
+        )
+        with tab_overview:
+            _render_real_estate_overview(snapshot, context, readiness)
+        with tab_workspace:
+            _render_real_estate_workspace(snapshot, context, workspace, readiness, cfg)
+        with tab_a:
+            _render_legacy_panel_a(context)
+        with tab_b:
+            _render_legacy_panel_b(context)
+        with tab_c:
+            _render_legacy_panel_c(context)
+
+    with user_tab:
+        _render_real_estate_user_avatar(context, workspace, readiness)
+
+    with enterprise_tab:
+        _render_real_estate_enterprise_avatar(snapshot, context, workspace, readiness)
 
 
 def _count_sqlite_rows(db_path: Path, table_name: str) -> int:
