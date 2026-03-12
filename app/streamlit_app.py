@@ -263,7 +263,7 @@ _I18N = {
         "communications": "Communications",
         "real_estate": "Real Estate",
         "gov_photovoltaic": "GOV / Photovoltaic",
-        "graphic_evidence": "Graphic Evidence",
+        "graphic_evidence": "Legal Evidence",
         "genius_operations": "GENIUS Operations",
         "agent_operations": "Agent Operations",
         "email": "Email",
@@ -296,7 +296,7 @@ _I18N = {
         "communications": "Comunicaciones",
         "real_estate": "Real Estate",
         "gov_photovoltaic": "GOV / Fotovoltaica",
-        "graphic_evidence": "Evidencia gráfica",
+        "graphic_evidence": "Evidencia legal",
         "genius_operations": "Operaciones GENIUS",
         "agent_operations": "Operaciones de agentes",
         "email": "Correo",
@@ -2819,7 +2819,7 @@ def render_gov_photovoltaic_vertical() -> None:
 
 
 def render_graphic_evidence_vertical() -> None:
-    st.subheader("Graphic Evidence")
+    st.subheader("Legal Evidence")
     evidence_root = LEGACY_PTDG_ROOT / "storage" / "evidence"
     evidence_dirs = [p for p in evidence_root.iterdir() if p.is_dir()] if evidence_root.exists() else []
     photo_count = 0
