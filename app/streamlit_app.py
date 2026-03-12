@@ -20,16 +20,21 @@ from common.services.github_connector import get_github_connector_status
 from common.services.agent_operations_package import AERSigningConfig, build_agent_operation_aer_package
 from common.services.auth_access_sqlite import (
     AuthRequestContext,
+    authenticate_local_account,
+    create_local_account,
     create_auth_session,
     get_account_status,
     get_recent_auth_snapshot,
+    issue_password_reset_token,
     log_auth_event,
     log_auth_notification_event,
     reactivate_account,
     revoke_auth_session,
+    reset_local_password,
     set_account_status,
     touch_auth_session,
     upsert_auth_account,
+    verify_email_token,
 )
 from common.services.auth_notifications import send_smtp_notification
 from common.services.agent_operations_sqlite import (
@@ -359,6 +364,16 @@ def _init_auth_state() -> None:
     st.session_state.setdefault("recovery_requests", [])
 
 
+def _password_policy_ok(password: str) -> tuple[bool, str]:
+    if len(password) < 10:
+        return False, "Password must have at least 10 characters."
+    if password.lower() == password or password.upper() == password:
+        return False, "Password should mix upper and lower case."
+    if not any(ch.isdigit() for ch in password):
+        return False, "Password should include at least one number."
+    return True, ""
+
+
 def _logout() -> None:
     session_id = st.session_state.get("auth_session_id") or ""
     auth_email = st.session_state.get("auth_email") or None
@@ -418,7 +433,7 @@ def _render_auth_shell() -> None:
     st.title("HREVN Unified V1 — Access Shell")
     st.caption("Documentary-safe access shell for the unified pilot. No real source access is enabled here.")
 
-    login_tab, recovery_tab = st.tabs(["Login", "Password Recovery"])
+    login_tab, signup_tab, verify_tab, recovery_tab = st.tabs(["Login", "Register", "Verify Email", "Password Recovery"])
 
     with login_tab:
         left, right = st.columns([1.1, 0.9])
@@ -432,6 +447,14 @@ def _render_auth_shell() -> None:
                     matched = ("admin", cfg.admin_email)
                 elif cfg.user_email and cfg.user_password and email.strip().lower() == cfg.user_email.strip().lower() and password == cfg.user_password:
                     matched = ("operator", cfg.user_email)
+                else:
+                    local_match = authenticate_local_account(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=email.strip().lower(),
+                        password=password,
+                    )
+                    if local_match:
+                        matched = (str(local_match.get("user_role") or "operator"), str(local_match.get("user_email") or email.strip().lower()))
 
                 if matched:
                     account_status = get_account_status(AUTH_ACCESS_SQLITE_PATH, matched[1])
@@ -478,7 +501,7 @@ def _render_auth_shell() -> None:
                         identifier_attempted=email.strip().lower() or None,
                         event_type="login_failure",
                         success_flag=False,
-                        failure_reason="invalid_credentials",
+                        failure_reason="invalid_credentials_or_password",
                         context=context,
                     )
                     st.error("Invalid credentials.")
@@ -539,8 +562,135 @@ def _render_auth_shell() -> None:
                 "This layer gives us the structure for login and recovery now. Real credential hardening can be attached later through Streamlit secrets."
             )
 
+    with signup_tab:
+        signup_left, signup_right = st.columns([1.1, 0.9])
+        with signup_left:
+            register_email = st.text_input("Email", key="register_email")
+            register_recovery = st.text_input("Recovery email (optional)", key="register_recovery_email")
+            register_password = st.text_input("Password", type="password", key="register_password")
+            register_password_2 = st.text_input("Confirm password", type="password", key="register_password_confirm")
+            if st.button("Create account", type="primary"):
+                context = _get_auth_request_context()
+                email_value = register_email.strip().lower()
+                recovery_value = register_recovery.strip().lower()
+                password_ok, password_message = _password_policy_ok(register_password)
+                if not email_value or "@" not in email_value:
+                    st.error("A valid email is required.")
+                elif register_password != register_password_2:
+                    st.error("Passwords do not match.")
+                elif not password_ok:
+                    st.error(password_message)
+                else:
+                    try:
+                        verification_token = create_local_account(
+                            AUTH_ACCESS_SQLITE_PATH,
+                            user_email=email_value,
+                            password=register_password,
+                            recovery_email=recovery_value or None,
+                            context=context,
+                        )
+                        log_auth_event(
+                            AUTH_ACCESS_SQLITE_PATH,
+                            user_email=email_value,
+                            user_role="operator",
+                            identifier_attempted=email_value,
+                            event_type="signup_success",
+                            success_flag=True,
+                            failure_reason=None,
+                            context=context,
+                        )
+                        _send_access_notification(
+                            related_user_email=email_value,
+                            target_email=email_value,
+                            event_type="verification_email_sent",
+                            subject="Verify your H-REVN access account",
+                            body=(
+                                "Your H-REVN unified workspace account has been created.\n\n"
+                                f"Verification token: {verification_token}\n\n"
+                                "Use the Verify Email tab to activate the account."
+                            ),
+                        )
+                        st.success("Account created. Verification token issued.")
+                        st.code(verification_token, language=None)
+                    except ValueError:
+                        log_auth_event(
+                            AUTH_ACCESS_SQLITE_PATH,
+                            user_email=email_value or None,
+                            user_role="operator",
+                            identifier_attempted=email_value or None,
+                            event_type="signup_failure",
+                            success_flag=False,
+                            failure_reason="account_already_exists",
+                            context=context,
+                        )
+                        st.error("An account with that email already exists.")
+        with signup_right:
+            st.markdown("#### Registration rules")
+            st.dataframe(
+                [
+                    {"Rule": "Email", "Requirement": "valid and unique"},
+                    {"Rule": "Password", "Requirement": "10+ chars, mixed case, one number"},
+                    {"Rule": "Verification", "Requirement": "email token required before login"},
+                    {"Rule": "Audit trail", "Requirement": "signup, verification, IP and session events are recorded"},
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with verify_tab:
+        verify_left, verify_right = st.columns([1.1, 0.9])
+        with verify_left:
+            verify_email = st.text_input("Email", key="verify_email")
+            verify_token = st.text_input("Verification token", key="verify_token")
+            if st.button("Verify account", type="primary"):
+                context = _get_auth_request_context()
+                verified = verify_email_token(
+                    AUTH_ACCESS_SQLITE_PATH,
+                    user_email=verify_email,
+                    token=verify_token,
+                    context=context,
+                )
+                if verified:
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=verify_email.strip().lower() or None,
+                        user_role="operator",
+                        identifier_attempted=verify_email.strip().lower() or None,
+                        event_type="email_verified",
+                        success_flag=True,
+                        failure_reason=None,
+                        context=context,
+                    )
+                    st.success("Email verified. The account is now active.")
+                else:
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=verify_email.strip().lower() or None,
+                        user_role="operator",
+                        identifier_attempted=verify_email.strip().lower() or None,
+                        event_type="email_verification_failure",
+                        success_flag=False,
+                        failure_reason="invalid_verification_token",
+                        context=context,
+                    )
+                    st.error("Verification failed. Check the email and token.")
+        with verify_right:
+            st.markdown("#### Verification flow")
+            st.dataframe(
+                [
+                    {"Step": "1", "Action": "Create account"},
+                    {"Step": "2", "Action": "Receive token by email"},
+                    {"Step": "3", "Action": "Paste token in Verify Email"},
+                    {"Step": "4", "Action": "Account becomes active"},
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
     with recovery_tab:
         recovery_email = st.text_input("Recovery email", key="recovery_email")
+        recovery_token = st.text_input("Reset token (optional)", key="recovery_token")
+        recovery_new_password = st.text_input("New password (optional)", type="password", key="recovery_new_password")
         st.text_area(
             "Recovery message preview",
             value="We have received your password recovery request. If the account is registered, the recovery flow will continue through the configured secure channel.",
@@ -569,6 +719,11 @@ def _render_auth_shell() -> None:
                 failure_reason=None,
                 context=context,
             )
+            reset_token = issue_password_reset_token(
+                AUTH_ACCESS_SQLITE_PATH,
+                user_email=requested_email,
+                context=context,
+            )
             _send_access_notification(
                 related_user_email=requested_email or None,
                 target_email=requested_email or cfg.recovery_notify_email,
@@ -576,6 +731,7 @@ def _render_auth_shell() -> None:
                 subject="H-REVN access recovery request received",
                 body=(
                     "We have received a password recovery request for the H-REVN unified workspace.\n\n"
+                    f"Reset token: {reset_token or 'not-issued'}\n\n"
                     "If the account is registered and eligible, the secure recovery path will continue through the configured channel.\n\n"
                     "This message is part of the H-REVN access audit trail."
                 ),
@@ -584,6 +740,54 @@ def _render_auth_shell() -> None:
                 st.success("Recovery request recorded. Delivery is configured for the secure notification path.")
             else:
                 st.success("Recovery request recorded in documentary mode. No outbound reset path is configured yet.")
+
+        if st.button("Reset password with token"):
+            context = _get_auth_request_context()
+            requested_email = recovery_email.strip().lower()
+            password_ok, password_message = _password_policy_ok(recovery_new_password)
+            if not requested_email or not recovery_token.strip():
+                st.error("Email and reset token are required.")
+            elif not password_ok:
+                st.error(password_message)
+            else:
+                reset_ok = reset_local_password(
+                    AUTH_ACCESS_SQLITE_PATH,
+                    user_email=requested_email,
+                    token=recovery_token,
+                    new_password=recovery_new_password,
+                    context=context,
+                )
+                if reset_ok:
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=requested_email,
+                        user_role="operator",
+                        identifier_attempted=requested_email,
+                        event_type="password_reset_completed",
+                        success_flag=True,
+                        failure_reason=None,
+                        context=context,
+                    )
+                    _send_access_notification(
+                        related_user_email=requested_email,
+                        target_email=requested_email,
+                        event_type="password_reset_completed",
+                        subject="H-REVN password reset completed",
+                        body="The password for your H-REVN unified workspace account has been updated.",
+                    )
+                    st.success("Password reset completed.")
+                else:
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=requested_email or None,
+                        user_role="operator",
+                        identifier_attempted=requested_email or None,
+                        event_type="password_reset_failure",
+                        success_flag=False,
+                        failure_reason="invalid_reset_token",
+                        context=context,
+                    )
+                    st.error("Password reset failed. Check the token.")
 
         if st.session_state.get("recovery_requests"):
             st.markdown("#### Recovery queue snapshot")

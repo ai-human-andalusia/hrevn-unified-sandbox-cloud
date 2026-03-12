@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import secrets
 import sqlite3
 from dataclasses import dataclass
@@ -15,6 +17,20 @@ def _utc_now() -> str:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
+
+
+def _random_token() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def _password_material(password: str, salt_b64: str | None = None) -> tuple[str, str]:
+    if salt_b64 is None:
+        salt = secrets.token_bytes(16)
+        salt_b64 = base64.b64encode(salt).decode("ascii")
+    else:
+        salt = base64.b64decode(salt_b64.encode("ascii"))
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
+    return base64.b64encode(digest).decode("ascii"), salt_b64
 
 
 @dataclass(frozen=True)
@@ -44,6 +60,21 @@ def ensure_auth_access_db(db_path: Path) -> None:
               updated_at_utc TEXT NOT NULL,
               suspended_at_utc TEXT,
               closed_at_utc TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS auth_local_credentials (
+              user_email TEXT PRIMARY KEY,
+              password_hash_b64 TEXT NOT NULL,
+              password_salt_b64 TEXT NOT NULL,
+              email_verified_flag INTEGER NOT NULL DEFAULT 0,
+              recovery_email TEXT,
+              verification_token TEXT,
+              verification_token_expires_at_utc TEXT,
+              verified_at_utc TEXT,
+              password_reset_token TEXT,
+              password_reset_expires_at_utc TEXT,
+              created_at_utc TEXT NOT NULL,
+              updated_at_utc TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS auth_login_events (
@@ -106,6 +137,7 @@ def ensure_auth_access_db(db_path: Path) -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_auth_accounts_status ON auth_accounts(account_status);
+            CREATE INDEX IF NOT EXISTS idx_auth_local_verified ON auth_local_credentials(email_verified_flag);
             CREATE INDEX IF NOT EXISTS idx_auth_login_events_created_at ON auth_login_events(created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_auth_login_events_email ON auth_login_events(user_email);
             CREATE INDEX IF NOT EXISTS idx_auth_active_sessions_email ON auth_active_sessions(user_email);
@@ -123,6 +155,7 @@ def upsert_auth_account(
     user_email: str,
     user_role: str,
     account_source: str,
+    initial_status: str = "active",
 ) -> None:
     ensure_auth_access_db(db_path)
     now = _utc_now()
@@ -135,13 +168,13 @@ def upsert_auth_account(
             '''
             INSERT INTO auth_accounts(
               user_email, user_role, account_status, account_source, created_at_utc, updated_at_utc
-            ) VALUES (?, ?, 'active', ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_email) DO UPDATE SET
               user_role=excluded.user_role,
               account_source=excluded.account_source,
               updated_at_utc=excluded.updated_at_utc
             ''',
-            (user_email, user_role, account_source, now, now),
+            (user_email, user_role, initial_status, account_source, now, now),
         )
         if existing is None:
             conn.execute(
@@ -150,10 +183,212 @@ def upsert_auth_account(
                   user_email, user_role, previous_status, resulting_status, event_type,
                   performed_by_user_email, performed_by_user_role, reason,
                   ip_public, user_agent, request_origin, created_at_utc
-                ) VALUES (?, ?, NULL, 'active', 'account_registered', NULL, NULL, ?, 'system', 'system', ?, ?)
+                ) VALUES (?, ?, NULL, ?, 'account_registered', NULL, NULL, ?, 'system', 'system', ?, ?)
                 ''',
-                (user_email, user_role, f"registered_from:{account_source}", account_source, now),
+                (user_email, user_role, initial_status, f"registered_from:{account_source}", account_source, now),
             )
+
+
+def create_local_account(
+    db_path: Path,
+    *,
+    user_email: str,
+    password: str,
+    recovery_email: str | None,
+    context: AuthRequestContext,
+) -> str:
+    ensure_auth_access_db(db_path)
+    user_email = user_email.strip().lower()
+    upsert_auth_account(
+        db_path,
+        user_email=user_email,
+        user_role="operator",
+        account_source="self_signup",
+        initial_status="pending_verification",
+    )
+    password_hash_b64, password_salt_b64 = _password_material(password)
+    now = _utc_now()
+    verification_token = _random_token()
+    verification_expires_at = now
+    # keep the simple timestamp format and a clear short-lived demo token horizon note in UI
+    with _connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT user_email FROM auth_local_credentials WHERE lower(user_email)=lower(?)",
+            (user_email,),
+        ).fetchone()
+        if existing is not None:
+            raise ValueError("account_already_exists")
+        conn.execute(
+            '''
+            INSERT INTO auth_local_credentials(
+              user_email, password_hash_b64, password_salt_b64, email_verified_flag,
+              recovery_email, verification_token, verification_token_expires_at_utc,
+              verified_at_utc, password_reset_token, password_reset_expires_at_utc,
+              created_at_utc, updated_at_utc
+            ) VALUES (?, ?, ?, 0, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+            ''',
+            (
+                user_email,
+                password_hash_b64,
+                password_salt_b64,
+                recovery_email.strip().lower() if recovery_email else None,
+                verification_token,
+                verification_expires_at,
+                now,
+                now,
+            ),
+        )
+        conn.execute(
+            '''
+            INSERT INTO auth_account_lifecycle_events(
+              user_email, user_role, previous_status, resulting_status, event_type,
+              performed_by_user_email, performed_by_user_role, reason,
+              ip_public, user_agent, request_origin, created_at_utc
+            ) VALUES (?, 'operator', 'pending_verification', 'pending_verification', 'verification_requested',
+                      NULL, NULL, 'self_signup', ?, ?, ?, ?)
+            ''',
+            (user_email, context.ip_public, context.user_agent, context.request_origin, now),
+        )
+    return verification_token
+
+
+def authenticate_local_account(db_path: Path, *, user_email: str, password: str) -> dict[str, Any] | None:
+    ensure_auth_access_db(db_path)
+    user_email = user_email.strip().lower()
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            '''
+            SELECT a.user_email, a.user_role, a.account_status, c.password_hash_b64, c.password_salt_b64, c.email_verified_flag
+            FROM auth_accounts a
+            JOIN auth_local_credentials c ON lower(a.user_email)=lower(c.user_email)
+            WHERE lower(a.user_email)=lower(?)
+            ''',
+            (user_email,),
+        ).fetchone()
+    if row is None:
+        return None
+    expected_hash, _ = _password_material(password, str(row["password_salt_b64"]))
+    if not hmac.compare_digest(expected_hash, str(row["password_hash_b64"])):
+        return None
+    return dict(row)
+
+
+def verify_email_token(db_path: Path, *, user_email: str, token: str, context: AuthRequestContext) -> bool:
+    ensure_auth_access_db(db_path)
+    user_email = user_email.strip().lower()
+    token = token.strip()
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT verification_token, email_verified_flag FROM auth_local_credentials WHERE lower(user_email)=lower(?)",
+            (user_email,),
+        ).fetchone()
+        if row is None or int(row["email_verified_flag"] or 0) == 1:
+            return False
+        if str(row["verification_token"] or "") != token:
+            return False
+        conn.execute(
+            '''
+            UPDATE auth_local_credentials
+            SET email_verified_flag=1,
+                verification_token=NULL,
+                verification_token_expires_at_utc=NULL,
+                verified_at_utc=?,
+                updated_at_utc=?
+            WHERE lower(user_email)=lower(?)
+            ''',
+            (now, now, user_email),
+        )
+        conn.execute(
+            '''
+            UPDATE auth_accounts
+            SET account_status='active', updated_at_utc=?
+            WHERE lower(user_email)=lower(?)
+            ''',
+            (now, user_email),
+        )
+        conn.execute(
+            '''
+            INSERT INTO auth_account_lifecycle_events(
+              user_email, user_role, previous_status, resulting_status, event_type,
+              performed_by_user_email, performed_by_user_role, reason,
+              ip_public, user_agent, request_origin, created_at_utc
+            ) VALUES (?, 'operator', 'pending_verification', 'active', 'email_verified',
+                      ?, 'self_service', NULL, ?, ?, ?, ?)
+            ''',
+            (user_email, user_email, context.ip_public, context.user_agent, context.request_origin, now),
+        )
+    return True
+
+
+def issue_password_reset_token(db_path: Path, *, user_email: str, context: AuthRequestContext) -> str | None:
+    ensure_auth_access_db(db_path)
+    user_email = user_email.strip().lower()
+    now = _utc_now()
+    token = _random_token()
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT user_email FROM auth_local_credentials WHERE lower(user_email)=lower(?)",
+            (user_email,),
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            '''
+            UPDATE auth_local_credentials
+            SET password_reset_token=?, password_reset_expires_at_utc=?, updated_at_utc=?
+            WHERE lower(user_email)=lower(?)
+            ''',
+            (token, now, now, user_email),
+        )
+        conn.execute(
+            '''
+            INSERT INTO auth_account_lifecycle_events(
+              user_email, user_role, previous_status, resulting_status, event_type,
+              performed_by_user_email, performed_by_user_role, reason,
+              ip_public, user_agent, request_origin, created_at_utc
+            ) VALUES (?, 'operator', NULL, NULL, 'password_reset_token_issued',
+                      NULL, NULL, NULL, ?, ?, ?, ?)
+            ''',
+            (user_email, context.ip_public, context.user_agent, context.request_origin, now),
+        )
+    return token
+
+
+def reset_local_password(db_path: Path, *, user_email: str, token: str, new_password: str, context: AuthRequestContext) -> bool:
+    ensure_auth_access_db(db_path)
+    user_email = user_email.strip().lower()
+    token = token.strip()
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT password_reset_token FROM auth_local_credentials WHERE lower(user_email)=lower(?)",
+            (user_email,),
+        ).fetchone()
+        if row is None or str(row["password_reset_token"] or "") != token:
+            return False
+        password_hash_b64, password_salt_b64 = _password_material(new_password)
+        conn.execute(
+            '''
+            UPDATE auth_local_credentials
+            SET password_hash_b64=?, password_salt_b64=?, password_reset_token=NULL,
+                password_reset_expires_at_utc=NULL, updated_at_utc=?
+            WHERE lower(user_email)=lower(?)
+            ''',
+            (password_hash_b64, password_salt_b64, now, user_email),
+        )
+        conn.execute(
+            '''
+            INSERT INTO auth_account_lifecycle_events(
+              user_email, user_role, previous_status, resulting_status, event_type,
+              performed_by_user_email, performed_by_user_role, reason,
+              ip_public, user_agent, request_origin, created_at_utc
+            ) VALUES (?, 'operator', NULL, NULL, 'password_reset_completed',
+                      ?, 'self_service', NULL, ?, ?, ?, ?)
+            ''',
+            (user_email, user_email, context.ip_public, context.user_agent, context.request_origin, now),
+        )
+    return True
 
 
 def get_account_status(db_path: Path, user_email: str) -> str:
