@@ -3081,28 +3081,16 @@ def render_real_estate_vertical() -> None:
     admin_tab, user_tab, enterprise_tab = st.tabs(["Admin", "User", "Enterprise"])
 
     with admin_tab:
-        tab_overview, tab_workspace, tab_v2, tab_a, tab_b, tab_c = st.tabs(
+        tab_overview, tab_v2 = st.tabs(
             [
                 "Overview",
-                "Workspace",
                 "V2 Builder",
-                "Legacy A",
-                "Legacy B",
-                "Legacy C",
             ]
         )
         with tab_overview:
             _render_real_estate_overview(snapshot, context, readiness)
-        with tab_workspace:
-            _render_real_estate_workspace(snapshot, context, workspace, readiness, cfg)
         with tab_v2:
             _render_real_estate_v2_builder()
-        with tab_a:
-            _render_legacy_panel_a(context, key_prefix="legacy_a_admin")
-        with tab_b:
-            _render_legacy_panel_b(context)
-        with tab_c:
-            _render_legacy_panel_c(context)
 
     with user_tab:
         _render_real_estate_user_avatar(context, workspace, readiness)
