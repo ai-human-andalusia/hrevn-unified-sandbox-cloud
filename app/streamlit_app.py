@@ -3520,9 +3520,7 @@ def main() -> None:
         [
             "Real Estate Vertical",
             "Agent Operations",
-            "Schema Explorer",
-            "Mapping Validator UI",
-            "Dry-Run Convergence Dashboard",
+                    "Arquitectura Status",
         ]
     )
 
