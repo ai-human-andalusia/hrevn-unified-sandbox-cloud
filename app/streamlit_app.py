@@ -43,6 +43,28 @@ class ValidationResult:
     notes: List[str]
 
 
+@dataclass(frozen=True)
+class AuthShellConfig:
+    auth_enabled: bool
+    has_configured_accounts: bool
+    admin_email: str
+    admin_password: str
+    user_email: str
+    user_password: str
+    recovery_notify_email: str
+
+
+@dataclass(frozen=True)
+class RealEstateReadiness:
+    observation_count: int
+    photo_count: int
+    all_observations_have_lpi: bool
+    min_photos_ok: bool
+    naming_policy_ready: bool
+    ai_gate_ready: bool
+    issuance_ready: bool
+
+
 def _safe_read(path: Path, max_chars: int = 12000) -> str:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -121,6 +143,142 @@ def _stats_for(path: Path) -> Dict[str, int]:
     }
 
 
+def _secret_value(key: str, default: str = "") -> str:
+    try:
+        value = st.secrets.get(key, default)
+        return str(value or default)
+    except Exception:
+        return default
+
+
+def _secret_bool(key: str, default: bool = False) -> bool:
+    raw = _secret_value(key, "1" if default else "0")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_auth_shell_config() -> AuthShellConfig:
+    admin_email = _secret_value("SANDBOX_ADMIN_EMAIL", "")
+    admin_password = _secret_value("SANDBOX_ADMIN_PASSWORD", "")
+    user_email = _secret_value("SANDBOX_USER_EMAIL", "")
+    user_password = _secret_value("SANDBOX_USER_PASSWORD", "")
+    configured = bool((admin_email and admin_password) or (user_email and user_password))
+    auth_enabled = _secret_bool("SANDBOX_AUTH_ENABLED", configured)
+    return AuthShellConfig(
+        auth_enabled=auth_enabled,
+        has_configured_accounts=configured,
+        admin_email=admin_email,
+        admin_password=admin_password,
+        user_email=user_email,
+        user_password=user_password,
+        recovery_notify_email=_secret_value("SANDBOX_RECOVERY_NOTIFY_EMAIL", _secret_value("MAIL_FROM", "")),
+    )
+
+
+def _init_auth_state() -> None:
+    st.session_state.setdefault("auth_logged_in", False)
+    st.session_state.setdefault("auth_role", "guest")
+    st.session_state.setdefault("auth_email", "")
+    st.session_state.setdefault("recovery_requests", [])
+
+
+def _logout() -> None:
+    st.session_state["auth_logged_in"] = False
+    st.session_state["auth_role"] = "guest"
+    st.session_state["auth_email"] = ""
+
+
+def _render_auth_shell() -> None:
+    cfg = _load_auth_shell_config()
+    _init_auth_state()
+
+    if st.session_state.get("auth_logged_in"):
+        role = st.session_state.get("auth_role", "guest")
+        email = st.session_state.get("auth_email", "")
+        st.sidebar.markdown("### Session")
+        st.sidebar.write({"role": role, "email": email, "mode": "documentary_shell"})
+        if st.sidebar.button("Log out"):
+            _logout()
+            st.rerun()
+        return
+
+    st.title("HREVN Unified V1 — Access Shell")
+    st.caption("Documentary-safe access shell for the unified pilot. No real source access is enabled here.")
+
+    login_tab, recovery_tab = st.tabs(["Login", "Password Recovery"])
+
+    with login_tab:
+        left, right = st.columns([1.1, 0.9])
+        with left:
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_password")
+            if st.button("Access workspace", type="primary"):
+                matched = None
+                if cfg.admin_email and cfg.admin_password and email.strip().lower() == cfg.admin_email.strip().lower() and password == cfg.admin_password:
+                    matched = ("admin", cfg.admin_email)
+                elif cfg.user_email and cfg.user_password and email.strip().lower() == cfg.user_email.strip().lower() and password == cfg.user_password:
+                    matched = ("operator", cfg.user_email)
+
+                if matched:
+                    st.session_state["auth_logged_in"] = True
+                    st.session_state["auth_role"] = matched[0]
+                    st.session_state["auth_email"] = matched[1]
+                    st.success("Access granted.")
+                    st.rerun()
+                elif cfg.auth_enabled and cfg.has_configured_accounts:
+                    st.error("Invalid credentials.")
+                else:
+                    st.warning("Auth shell is not fully configured yet. Use documentary demo access below.")
+
+            if (not cfg.auth_enabled) or (not cfg.has_configured_accounts):
+                if st.button("Continue in documentary demo mode"):
+                    st.session_state["auth_logged_in"] = True
+                    st.session_state["auth_role"] = "demo"
+                    st.session_state["auth_email"] = "demo@hrevn.local"
+                    st.rerun()
+        with right:
+            st.markdown("#### Access status")
+            st.write(
+                {
+                    "auth_enabled": cfg.auth_enabled,
+                    "configured_accounts": cfg.has_configured_accounts,
+                    "fallback_demo_mode": True,
+                    "workspace_scope": "sandbox_only",
+                }
+            )
+            st.info(
+                "This layer gives us the structure for login and recovery now. Real credential hardening can be attached later through Streamlit secrets."
+            )
+
+    with recovery_tab:
+        recovery_email = st.text_input("Recovery email", key="recovery_email")
+        st.text_area(
+            "Recovery message preview",
+            value="We have received your password recovery request. If the account is registered, the recovery flow will continue through the configured secure channel.",
+            height=120,
+            disabled=True,
+        )
+        if st.button("Request recovery"):
+            requests = list(st.session_state.get("recovery_requests", []))
+            requests.append(
+                {
+                    "email": recovery_email.strip(),
+                    "status": "received",
+                    "delivery_channel": "configured_secure_channel" if cfg.recovery_notify_email else "not_configured",
+                }
+            )
+            st.session_state["recovery_requests"] = requests[-20:]
+            if cfg.recovery_notify_email:
+                st.success("Recovery request recorded. Delivery is configured for the secure notification path.")
+            else:
+                st.success("Recovery request recorded in documentary mode. No outbound reset path is configured yet.")
+
+        if st.session_state.get("recovery_requests"):
+            st.markdown("#### Recovery queue snapshot")
+            st.dataframe(st.session_state["recovery_requests"], use_container_width=True)
+
+    st.stop()
+
+
 def _prepare_real_estate_context(snapshot, visit_id: str) -> dict:
     visits = snapshot.visits
     assets = snapshot.assets
@@ -154,14 +312,39 @@ def _prepare_real_estate_context(snapshot, visit_id: str) -> dict:
     }
 
 
-def _render_real_estate_overview(snapshot, visit_id: str, context: dict) -> None:
+def _build_real_estate_readiness(context: dict) -> RealEstateReadiness:
+    observations = context["selected_observations"]
+    photos = context["selected_photos"]
+    all_observations_have_lpi = all(bool((item.get("lpi_code") or "").strip()) for item in observations) if observations else False
+    min_required = 0
+    for item in observations:
+        sev = int(item.get("severity_0_5") or 0)
+        min_required += 3 if sev >= 3 else 1
+    min_photos_ok = len(photos) >= min_required if observations else False
+    naming_policy_ready = bool(context["selected_visit"]) and bool(context["selected_asset"])
+    ai_gate_ready = len(photos) > 0
+    issuance_ready = all([
+        len(observations) > 0,
+        len(photos) > 0,
+        all_observations_have_lpi,
+        min_photos_ok,
+        naming_policy_ready,
+        ai_gate_ready,
+    ])
+    return RealEstateReadiness(
+        observation_count=len(observations),
+        photo_count=len(photos),
+        all_observations_have_lpi=all_observations_have_lpi,
+        min_photos_ok=min_photos_ok,
+        naming_policy_ready=naming_policy_ready,
+        ai_gate_ready=ai_gate_ready,
+        issuance_ready=issuance_ready,
+    )
+
+
+def _render_real_estate_overview(snapshot, context: dict, readiness: RealEstateReadiness) -> None:
     assets = snapshot.assets
     sessions = snapshot.visits
-    ready_or_issued = sum(
-        1
-        for item in sessions
-        if isinstance(item, dict) and item.get("certification_status") in {"pending", "issued", None, ""}
-    )
     cities = sorted(
         {
             str(item.get("asset_city")).strip()
@@ -173,30 +356,104 @@ def _render_real_estate_overview(snapshot, visit_id: str, context: dict) -> None
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Assets", len(assets))
     m2.metric("Visits", len(sessions))
-    m3.metric("Ready or Issued", ready_or_issued)
-    m4.metric("Cities", len(cities))
+    m3.metric("Observations", readiness.observation_count)
+    m4.metric("Photos", readiness.photo_count)
 
-    c1, c2 = st.columns(2)
+    st.markdown("### Portfolio snapshot")
+    c1, c2 = st.columns([1.2, 0.8])
     with c1:
-        st.markdown("### Visits")
         st.dataframe(sessions, use_container_width=True)
     with c2:
-        st.markdown("### Assets")
-        st.dataframe(assets, use_container_width=True)
+        st.write({"cities": cities, "asset_count": len(assets), "visit_count": len(sessions)})
 
-    st.markdown("### Selected Visit")
-    if context["selected_visit"]:
-        st.dataframe([context["selected_visit"]], use_container_width=True)
-    else:
-        st.info("No visit selected.")
 
-    p1, p2 = st.columns(2)
-    with p1:
-        st.markdown("### Observations")
-        st.dataframe(context["selected_observations"], use_container_width=True)
-    with p2:
-        st.markdown("### Photos")
-        st.dataframe(context["selected_photos"], use_container_width=True)
+def _render_real_estate_workspace(context: dict, readiness: RealEstateReadiness) -> None:
+    visit = context["selected_visit"] or {}
+    asset = context["selected_asset"] or {}
+    observations = context["selected_observations"]
+    photos = context["selected_photos"]
+    severity_counts = context["severity_counts"]
+
+    header_left, header_right = st.columns([1.2, 0.8])
+    with header_left:
+        st.markdown("### Visit workspace")
+        st.write(
+            {
+                "visit_id": visit.get("visit_id"),
+                "asset_id": visit.get("asset_id"),
+                "asset_public_id": asset.get("asset_public_id"),
+                "visit_date_utc": visit.get("visit_date_utc"),
+                "inspector_name": visit.get("inspector_name"),
+                "client_name": asset.get("client_name"),
+                "asset_city": asset.get("asset_city"),
+            }
+        )
+    with header_right:
+        st.markdown("### Issuance readiness")
+        st.write(
+            {
+                "all_observations_have_lpi": readiness.all_observations_have_lpi,
+                "minimum_photo_rule_ok": readiness.min_photos_ok,
+                "naming_policy_ready": readiness.naming_policy_ready,
+                "ai_gate_ready": readiness.ai_gate_ready,
+                "issuance_ready": readiness.issuance_ready,
+            }
+        )
+        if readiness.issuance_ready:
+            st.success("This visit is structurally ready for the issuance stage.")
+        else:
+            st.warning("This visit still needs one or more readiness conditions before issuance.")
+
+    obs_col, detail_col = st.columns([1.1, 0.9])
+    with obs_col:
+        st.markdown("### Observation list")
+        if observations:
+            labels = [f"{item.get('record_uuid')} | {item.get('lpi_code') or '-'} | sev {item.get('severity_0_5') or 0}" for item in observations]
+            selected_label = st.selectbox("Select observation", labels, key="workspace_observation")
+            selected_id = selected_label.split(" | ")[0]
+            selected_observation = next((item for item in observations if item.get("record_uuid") == selected_id), observations[0])
+            st.dataframe(observations, use_container_width=True)
+        else:
+            selected_observation = {}
+            st.info("No observations found for this visit.")
+    with detail_col:
+        st.markdown("### Observation detail")
+        if selected_observation:
+            st.text_input("record_uuid", value=str(selected_observation.get("record_uuid") or ""), disabled=True)
+            st.text_input("lpi_code", value=str(selected_observation.get("lpi_code") or ""), disabled=True)
+            st.number_input("severity_0_5", min_value=0, max_value=5, value=int(selected_observation.get("severity_0_5") or 0), disabled=True)
+            st.text_area("observation_description", value=str(selected_observation.get("observation_description") or ""), height=140, disabled=True)
+            st.text_area("coordinator_notes", value=str(selected_observation.get("coordinator_notes") or ""), height=120, disabled=True)
+        st.markdown("### Severity mix")
+        st.write(severity_counts or {"no_data": 0})
+
+    photo_col, ai_col = st.columns([1.1, 0.9])
+    with photo_col:
+        st.markdown("### Photo queue")
+        st.dataframe(photos, use_container_width=True)
+        next_number = len(photos) + 1
+        preview_filename = f"{visit.get('asset_id') or 'AST'}_{visit.get('visit_id') or 'VIS'}_{next_number:03d}"
+        st.text_input("Next technical filename preview", value=preview_filename, disabled=True)
+    with ai_col:
+        st.markdown("### AI review state")
+        quality_state = "ready_for_review" if photos else "blocked_no_photos"
+        st.write(
+            {
+                "provider": choose_ai_provider(load_common_config()).selected,
+                "review_state": quality_state,
+                "blocking_policy": "block_if_inconsistencies_detected",
+                "semantic_titles_mode": "planned_common_contract",
+                "delivery_mode": "async_after_finalize",
+            }
+        )
+        if photos:
+            sample_title = f"Proposed title: {asset.get('asset_public_id') or visit.get('asset_id') or 'asset'} / visit evidence / first image"
+            st.text_area("Semantic title preview", value=sample_title, height=100, disabled=True)
+
+    st.markdown("### Finalization behavior")
+    st.info(
+        "Target V1 behavior: when the operator finalizes the visit, the system moves to async issuance, runs AI pre-issuance checks, and delivers the certificate by email when ready."
+    )
 
 
 def _render_legacy_panel_a(context: dict) -> None:
@@ -379,7 +636,7 @@ def _render_legacy_panel_c(context: dict) -> None:
 
 def render_real_estate_vertical() -> None:
     st.subheader("Real Estate Vertical")
-    st.caption("Working view over the Real Estate SQLite snapshot, plus recovered legacy panel comparisons.")
+    st.caption("Pilot workspace over the Real Estate SQLite snapshot, with improved operator view and legacy references.")
 
     if not REAL_ESTATE_SQLITE_PATH.exists():
         st.error("Real Estate SQLite snapshot not available.")
@@ -393,18 +650,22 @@ def render_real_estate_vertical() -> None:
 
     selected_visit = st.selectbox("Selected visit", options=visit_ids)
     context = _prepare_real_estate_context(snapshot, selected_visit)
+    readiness = _build_real_estate_readiness(context)
 
-    tab_overview, tab_a, tab_b, tab_c = st.tabs(
+    tab_overview, tab_workspace, tab_a, tab_b, tab_c = st.tabs(
         [
-            "Unified View",
-            "Legacy Panel A",
-            "Legacy Panel B",
-            "Legacy Panel C",
+            "Overview",
+            "Workspace",
+            "Legacy A",
+            "Legacy B",
+            "Legacy C",
         ]
     )
 
     with tab_overview:
-        _render_real_estate_overview(snapshot, selected_visit, context)
+        _render_real_estate_overview(snapshot, context, readiness)
+    with tab_workspace:
+        _render_real_estate_workspace(context, readiness)
     with tab_a:
         _render_legacy_panel_a(context)
     with tab_b:
@@ -618,6 +879,8 @@ def render_dry_run_dashboard() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="HREVN Sandbox — Documentary Panels", layout="wide")
+    _render_auth_shell()
+
     st.title("HREVN UNIFIED V1 SANDBOX — Streamlit Panels")
     st.caption(
         "Documentary-only UI. No real source access, no SQLite writes, no real data reads outside the bundled sandbox snapshot."
