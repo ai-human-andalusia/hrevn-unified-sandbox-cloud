@@ -2714,7 +2714,10 @@ def render_real_estate_vertical() -> None:
         st.warning("No visits available in the Real Estate snapshot.")
         return
 
-    selected_visit = st.selectbox("Selected visit", options=visit_ids)
+    selected_visit = st.session_state.get("real_estate_selected_visit")
+    if selected_visit not in visit_ids:
+        selected_visit = visit_ids[0]
+        st.session_state["real_estate_selected_visit"] = selected_visit
     context = _prepare_real_estate_context(snapshot, selected_visit)
     workspace = build_real_estate_workspace(snapshot, selected_visit)
     readiness = _build_real_estate_readiness(context, workspace)
