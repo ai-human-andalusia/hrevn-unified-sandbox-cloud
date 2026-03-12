@@ -182,30 +182,47 @@ def _build_signature_payload(
     }
 
 
-def _maybe_build_signature_artifact(
+def _build_signature_spec_bytes() -> bytes:
+    return (
+        "SIGNATURE PROFILE = hrevn_signing_v1\n"
+        "SIGNATURE ARTIFACT = SIGNATURE.json\n"
+        "SIGNED PAYLOAD ARTIFACT = SIGNATURE_PAYLOAD.json\n"
+        "SIGNATURE SPEC = SIGNATURE_SPEC_AER_V1.txt\n"
+        "ALGORITHM = ed25519\n"
+        "PAYLOAD SERIALIZATION = exact UTF-8 bytes of SIGNATURE_PAYLOAD.json as stored in the package\n"
+        "PAYLOAD NEWLINE RULE = no trailing newline required or appended by the verifier\n"
+        "VERIFICATION METHOD = decode signature_value_base64, decode public_key_base64, verify signature over exact payload bytes\n"
+        "PAYLOAD CONTENT = package_family, bundle_profile, aer_id, record_id, workflow_id, signature_profile, signed_by, key_id, signature_algorithm, signature_scope, manifest_hash, root_hash, verification_url\n"
+    ).encode("utf-8")
+
+
+def _maybe_build_signature_artifacts(
     aer_id: str,
     record: dict[str, Any],
     manifest_hash: str,
     root_hash: str,
     signing_config: AERSigningConfig | None,
-) -> tuple[dict[str, Any] | None, bytes | None]:
+) -> tuple[dict[str, Any] | None, bytes | None, bytes | None]:
     if not signing_config or not signing_config.enabled or not signing_config.private_key.strip():
-        return None, None
+        return None, None, None
 
     private_key = _load_ed25519_private_key(signing_config.private_key)
     public_key = private_key.public_key()
     payload = _build_signature_payload(aer_id, record, manifest_hash, root_hash, signing_config)
-    payload_bytes = _canonical_json_bytes(payload)
+    payload_bytes = _json_bytes(payload)
     signature_bytes = private_key.sign(payload_bytes)
     public_key_bytes = _ed25519_public_key_bytes(public_key)
     signature_artifact = {
         **payload,
         "signature_status": "signed",
+        "signature_spec_artifact": "SIGNATURE_SPEC_AER_V1.txt",
+        "signed_payload_artifact": "SIGNATURE_PAYLOAD.json",
+        "payload_hash_sha256": hashlib.sha256(payload_bytes).hexdigest(),
         "public_key_fingerprint_sha256": hashlib.sha256(public_key_bytes).hexdigest(),
         "public_key_base64": base64.b64encode(public_key_bytes).decode("ascii"),
         "signature_value_base64": base64.b64encode(signature_bytes).decode("ascii"),
     }
-    return signature_artifact, _json_bytes(signature_artifact)
+    return signature_artifact, _json_bytes(signature_artifact), payload_bytes
 
 
 def build_agent_operation_aer_package(record: dict[str, Any], signing_config: AERSigningConfig | None = None) -> dict[str, Any]:
@@ -275,7 +292,13 @@ def build_agent_operation_aer_package(record: dict[str, Any], signing_config: AE
         {"artifact": "ROOT_SPEC_AER_V1.txt", "category": "verification", "role": "root_hash_rule"},
     ]
     if signing_requested:
-        artifact_catalog.append({"artifact": "SIGNATURE.json", "category": "verification", "role": "institutional_signature_record"})
+        artifact_catalog.extend(
+            [
+                {"artifact": "SIGNATURE_PAYLOAD.json", "category": "verification", "role": "signed_payload_record"},
+                {"artifact": "SIGNATURE.json", "category": "verification", "role": "institutional_signature_record"},
+                {"artifact": "SIGNATURE_SPEC_AER_V1.txt", "category": "verification", "role": "signature_verification_rule"},
+            ]
+        )
     manifest = {
         "aer_id": aer_id,
         "record_id": record["record_id"],
@@ -339,8 +362,10 @@ def build_agent_operation_aer_package(record: dict[str, Any], signing_config: AE
         manifest["signature_algorithm"] = signing_config.algorithm
         manifest["signature_scope"] = ["manifest.json", "ROOT_HASH_SHA256.txt"]
         manifest["verification_url"] = signing_config.verification_url
-        manifest["authoritative_files"].append("SIGNATURE.json")
-        manifest["checksum_scope"].append("SIGNATURE.json")
+        manifest["signature_payload_artifact"] = "SIGNATURE_PAYLOAD.json"
+        manifest["signature_spec_artifact"] = "SIGNATURE_SPEC_AER_V1.txt"
+        manifest["authoritative_files"].extend(["SIGNATURE_PAYLOAD.json", "SIGNATURE.json", "SIGNATURE_SPEC_AER_V1.txt"])
+        manifest["checksum_scope"].extend(["SIGNATURE_PAYLOAD.json", "SIGNATURE.json", "SIGNATURE_SPEC_AER_V1.txt"])
     manifest_bytes = _json_bytes(manifest)
     artifacts["manifest.json"] = manifest_bytes
 
@@ -374,15 +399,17 @@ def build_agent_operation_aer_package(record: dict[str, Any], signing_config: AE
         "5. SHA-256 that exact text and compare it with ROOT_HASH_SHA256.txt.\n"
     ).encode("utf-8")
 
-    signature_artifact, signature_bytes = _maybe_build_signature_artifact(
+    signature_artifact, signature_bytes, signature_payload_bytes = _maybe_build_signature_artifacts(
         aer_id,
         record,
         _sha256_bytes(manifest_bytes),
         root_hash,
         signing_config if signing_requested else None,
     )
-    if signature_artifact and signature_bytes:
+    if signature_artifact and signature_bytes and signature_payload_bytes:
+        artifacts["SIGNATURE_PAYLOAD.json"] = signature_payload_bytes
         artifacts["SIGNATURE.json"] = signature_bytes
+        artifacts["SIGNATURE_SPEC_AER_V1.txt"] = _build_signature_spec_bytes()
 
     checksum_names = manifest["checksum_scope"]
     checksum_rows = [(name, _sha256_bytes(artifacts[name])) for name in checksum_names]
