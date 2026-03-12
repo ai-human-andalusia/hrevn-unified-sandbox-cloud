@@ -3515,16 +3515,20 @@ def main() -> None:
     with tab_actions:
         render_controlled_actions_vertical()
     with tab_rwa:
-        selected_visit = st.session_state.get("real_estate_selected_visit")
-        visit_ids = [visit.visit_id for visit in snapshot.visits]
-        if visit_ids:
-            if selected_visit not in visit_ids:
-                selected_visit = visit_ids[0]
-                st.session_state["real_estate_selected_visit"] = selected_visit
-            rwa_context = _prepare_real_estate_context(snapshot, selected_visit)
-            _render_legacy_panel_a(rwa_context)
+        if not REAL_ESTATE_SQLITE_PATH.exists():
+            st.info("Real Estate snapshot not available yet.")
         else:
-            st.info("No Real Estate visits available yet.")
+            rwa_snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
+            selected_visit = st.session_state.get("real_estate_selected_visit")
+            visit_ids = [visit.visit_id for visit in rwa_snapshot.visits]
+            if visit_ids:
+                if selected_visit not in visit_ids:
+                    selected_visit = visit_ids[0]
+                    st.session_state["real_estate_selected_visit"] = selected_visit
+                rwa_context = _prepare_real_estate_context(rwa_snapshot, selected_visit)
+                _render_legacy_panel_a(rwa_context)
+            else:
+                st.info("No Real Estate visits available yet.")
     with tab_arquitectura_status:
         render_dry_run_dashboard()
 
