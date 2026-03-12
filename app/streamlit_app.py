@@ -2154,6 +2154,39 @@ def _render_real_estate_workspace(snapshot, context: dict, workspace: dict | Non
     )
 
 
+def _resolve_re_v2_lpi_options_for_asset(asset_row: dict | None) -> list[str]:
+    if not asset_row:
+        return [""]
+
+    try:
+        snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
+        lpi_dictionary = snapshot.lpi_dictionary
+    except Exception:
+        return [""]
+
+    asset_type = str(asset_row.get("asset_type") or "").strip().lower()
+    group_map = {
+        "residential": "BUILDING_STANDARD",
+        "tertiary": "BUILDING_STANDARD",
+        "industrial": "BUILDING_STANDARD",
+        "urban_land": "LAND_URBAN",
+        "rural_land": "LAND_RUSTIC",
+        "rustic_land": "LAND_RUSTIC",
+    }
+    target_group = group_map.get(asset_type, "BUILDING_STANDARD")
+
+    filtered = [
+        item for item in lpi_dictionary
+        if str(item.get("lpi_group") or "").strip().upper() == target_group
+    ]
+    labels = [
+        f"{str(item.get('lpi_code') or '').strip()} | {str(item.get('lpi_title') or '').strip()}"
+        for item in filtered
+        if str(item.get('lpi_code') or '').strip()
+    ]
+    return labels or [""]
+
+
 def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> None:
     lpi_options = context["lpi_options"]
     all_assets = list_re_v2_assets()
@@ -2245,13 +2278,12 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
         st.text_input("Número de observación", value=observation_display, disabled=True)
         selected_observation = {}
 
-        current_lpi = str(selected_observation.get("lpi_code") or "")
-        lpi_index = lpi_options.index(current_lpi) if current_lpi in lpi_options else 0
+        asset_lpi_options = _resolve_re_v2_lpi_options_for_asset(current_asset_row)
         st.selectbox(
             "LPI code (official)",
-            options=lpi_options or [""],
-            index=lpi_index if lpi_options else 0,
-            disabled=True,
+            options=asset_lpi_options,
+            index=0,
+            disabled=not bool(current_asset_row),
             key=f"{key_prefix}_lpi",
         )
         severity = int(selected_observation.get("severity_0_5") or 0)
