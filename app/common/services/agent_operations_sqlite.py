@@ -44,10 +44,14 @@ def _ensure_record_columns(conn: sqlite3.Connection) -> None:
     }
     for column, ddl in required.items():
         if column not in columns:
-            conn.execute(ddl)
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
 
 
 def _seed_record_defaults(conn: sqlite3.Connection) -> None:
+    columns = _table_columns(conn, "agent_operation_records")
     defaults = {
         "CAR-2026-001": {
             "workflow_id": "WF-TREASURY-2026-001",
@@ -77,29 +81,27 @@ def _seed_record_defaults(conn: sqlite3.Connection) -> None:
             "execution_result": "blocked_by_human_rejection",
         },
     }
+    field_to_sql = {
+        "workflow_id": "workflow_id = coalesce(nullif(workflow_id, ''), ?)",
+        "agent_role": "agent_role = coalesce(nullif(agent_role, ''), ?)",
+        "reviewer_name": "reviewer_name = coalesce(nullif(reviewer_name, ''), ?)",
+        "reviewer_role": "reviewer_role = coalesce(nullif(reviewer_role, ''), ?)",
+        "reviewed_at_utc": "reviewed_at_utc = coalesce(nullif(reviewed_at_utc, ''), ?)",
+        "decision_rationale": "decision_rationale = coalesce(nullif(decision_rationale, ''), ?)",
+        "execution_result": "execution_result = coalesce(nullif(execution_result, ''), ?)",
+    }
     for record_id, values in defaults.items():
+        assignments = []
+        params = []
+        for field, sql in field_to_sql.items():
+            if field in columns:
+                assignments.append(sql)
+                params.append(values[field])
+        if not assignments:
+            continue
         conn.execute(
-            """
-            update agent_operation_records
-            set workflow_id = coalesce(nullif(workflow_id, ''), ?),
-                agent_role = coalesce(nullif(agent_role, ''), ?),
-                reviewer_name = coalesce(nullif(reviewer_name, ''), ?),
-                reviewer_role = coalesce(nullif(reviewer_role, ''), ?),
-                reviewed_at_utc = coalesce(nullif(reviewed_at_utc, ''), ?),
-                decision_rationale = coalesce(nullif(decision_rationale, ''), ?),
-                execution_result = coalesce(nullif(execution_result, ''), ?)
-            where record_id = ?
-            """,
-            (
-                values["workflow_id"],
-                values["agent_role"],
-                values["reviewer_name"],
-                values["reviewer_role"],
-                values["reviewed_at_utc"],
-                values["decision_rationale"],
-                values["execution_result"],
-                record_id,
-            ),
+            f"update agent_operation_records set {', '.join(assignments)} where record_id = ?",
+            tuple(params + [record_id]),
         )
 
 
