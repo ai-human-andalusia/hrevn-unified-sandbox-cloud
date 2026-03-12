@@ -758,12 +758,23 @@ def render_controlled_actions_vertical() -> None:
         .agent-ops-header {{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;align-items:start;}}
         .agent-ops-counter-row {{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}}
         .agent-ops-counter {{min-width:108px;padding:8px 10px;border-radius:10px;background:#edf2f7;color:#1a202c;border:1px solid #e2e8f0;}}
-        .agent-ops-counter-label {{font-size:0.66rem;opacity:0.9;text-transform:uppercase;letter-spacing:0.04em;}}
-        .agent-ops-counter-value {{font-size:0.88rem;font-weight:700;line-height:1.2;margin-top:4px;}}
+        .agent-ops-counter-label {{font-size:0.66rem;opacity:0.9;text-transform:uppercase;letter-spacing:0.04em;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}}
+        .agent-ops-counter-value {{font-size:0.88rem;font-weight:700;line-height:1.2;margin-top:4px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}}
         .agent-ops-status-row {{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}}
         .agent-ops-chip {{min-width:116px;padding:8px 10px;border-radius:10px;color:#fff;}}
-        .agent-ops-chip-label {{font-size:0.66rem;opacity:0.92;text-transform:uppercase;letter-spacing:0.04em;}}
-        .agent-ops-chip-value {{font-size:0.8rem;font-weight:700;line-height:1.2;margin-top:4px;}}
+        .agent-ops-chip-label {{font-size:0.66rem;opacity:0.92;text-transform:uppercase;letter-spacing:0.04em;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}}
+        .agent-ops-chip-value {{font-size:0.8rem;font-weight:700;line-height:1.2;margin-top:4px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}}
+        div[data-testid="stDataFrame"] [role="columnheader"] {{
+            text-transform:uppercase !important;
+            letter-spacing:0.06em;
+            font-size:0.72rem !important;
+            font-weight:700 !important;
+            font-family:'SFMono-Regular',Menlo,Consolas,monospace !important;
+        }}
+        div[data-testid="stDataFrame"] [role="gridcell"] {{
+            font-size:0.8rem !important;
+            font-family:'SFMono-Regular',Menlo,Consolas,monospace !important;
+        }}
         </style>
         <div class="agent-ops-header">
           <div class="agent-ops-counter-row">
@@ -791,10 +802,10 @@ def render_controlled_actions_vertical() -> None:
         _render_panel_section_title("Records")
         table_rows = [
             {
-                "Record": item["record_id"],
-                "Agent": item["agent_name"],
-                "Risk": item["risk_level"],
-                "Status": _controlled_actions_status_label(item["status"]),
+                "RECORD": item["record_id"],
+                "AGENT": item["agent_name"],
+                "RISK": item["risk_level"],
+                "STATUS": _controlled_actions_status_label(item["status"]),
             }
             for item in records
         ]
@@ -843,13 +854,13 @@ def render_controlled_actions_vertical() -> None:
         _render_panel_section_title("Proposed Operation")
         st.dataframe(
             [
-                {"Field": "Record ID", "Value": selected["record_id"]},
-                {"Field": "Submitted at", "Value": selected["submitted_at_utc"]},
-                {"Field": "Agent", "Value": selected["agent_name"]},
-                {"Field": "Operation type", "Value": selected["operation_type"]},
-                {"Field": "Operation", "Value": selected["intent"]},
-                {"Field": "Tool", "Value": selected["tool_name"]},
-                {"Field": "Review reason", "Value": selected["review_reason"]},
+                {"FIELD": "Record ID", "VALUE": selected["record_id"]},
+                {"FIELD": "Submitted at", "VALUE": selected["submitted_at_utc"]},
+                {"FIELD": "Agent", "VALUE": selected["agent_name"]},
+                {"FIELD": "Operation type", "VALUE": selected["operation_type"]},
+                {"FIELD": "Operation", "VALUE": selected["intent"]},
+                {"FIELD": "Tool", "VALUE": selected["tool_name"]},
+                {"FIELD": "Review reason", "VALUE": selected["review_reason"]},
             ],
             use_container_width=True,
             hide_index=True,
@@ -860,9 +871,9 @@ def render_controlled_actions_vertical() -> None:
         _render_panel_section_title("Human Authorization")
         st.dataframe(
             [
-                {"Control": "Decision", "State": selected["human_action"].replace("_", " ").title()},
-                {"Control": "Recommended", "State": "Yes" if selected["recommended_for_execution"] else "No"},
-                {"Control": "Seal status", "State": selected["seal_status"].replace("_", " ").title()},
+                {"CONTROL": "Decision", "STATE": selected["human_action"].replace("_", " ").title()},
+                {"CONTROL": "Recommended", "STATE": "Yes" if selected["recommended_for_execution"] else "No"},
+                {"CONTROL": "Seal status", "STATE": selected["seal_status"].replace("_", " ").title()},
             ],
             use_container_width=True,
             hide_index=True,
@@ -882,7 +893,7 @@ def render_controlled_actions_vertical() -> None:
     with row_bottom_b:
         _render_panel_section_title("Operation Parameters")
         st.dataframe(
-            [{"Parameter": row["field"], "Value": row["value"], "Type": row["type"]} for row in selected["parameters"]],
+            [{"PARAMETER": row["field"], "VALUE": row["value"], "TYPE": row["type"]} for row in selected["parameters"]],
             use_container_width=True,
             hide_index=True,
         )
@@ -891,8 +902,8 @@ def render_controlled_actions_vertical() -> None:
         _render_panel_section_title("Verification Seal")
         st.dataframe(
             [
-                {"Field": "Seal reference", "Value": selected["seal_reference"] or "Pending decision"},
-                {"Field": "Export package", "Value": "Ready" if selected["status"] != "pending_review" else "Waiting for human decision"},
+                {"FIELD": "Seal reference", "VALUE": selected["seal_reference"] or "Pending decision"},
+                {"FIELD": "Export package", "VALUE": "Ready" if selected["status"] != "pending_review" else "Waiting for human decision"},
             ],
             use_container_width=True,
             hide_index=True,
