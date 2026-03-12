@@ -16,6 +16,7 @@ class RealEstateSnapshot:
     assets: list[dict[str, Any]]
     observations: list[dict[str, Any]]
     photos: list[dict[str, Any]]
+    lpi_dictionary: list[dict[str, Any]]
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -26,6 +27,10 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 def _rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
 
 
 def load_real_estate_snapshot(db_path: Path) -> RealEstateSnapshot:
@@ -56,7 +61,20 @@ def load_real_estate_snapshot(db_path: Path) -> RealEstateSnapshot:
         assets = _rows(
             conn,
             """
-            select asset_id, asset_public_id, asset_template_type, asset_type, asset_city, client_name
+            select
+              asset_id,
+              asset_public_id,
+              asset_template_type,
+              asset_type,
+              asset_name,
+              asset_city,
+              address_line,
+              province,
+              postal_code,
+              client_name,
+              entity_legal_name,
+              gps_lat,
+              gps_lon
             from assets
             order by asset_id
             """,
@@ -64,7 +82,22 @@ def load_real_estate_snapshot(db_path: Path) -> RealEstateSnapshot:
         observations = _rows(
             conn,
             """
-            select record_uuid, asset_id, visit_id, lpi_code, severity_0_5, observation_description, coordinator_notes
+            select
+              record_uuid,
+              asset_id,
+              visit_id,
+              lpi_code,
+              severity_0_5,
+              observation_description,
+              coordinator_notes,
+              row_status,
+              review_status,
+              certification_status,
+              min_photos_required,
+              min_docs_required,
+              out_of_scope_flag,
+              out_of_scope_reason,
+              captured_at_utc
             from observations
             order by visit_id, record_uuid
             """,
@@ -72,14 +105,100 @@ def load_real_estate_snapshot(db_path: Path) -> RealEstateSnapshot:
         photos = _rows(
             conn,
             """
-            select photo_uuid, record_uuid, visit_id, photo_role, photo_hash_sha256, photo_filename, photo_path
+            select
+              photo_uuid,
+              record_uuid,
+              asset_id,
+              visit_id,
+              lpi_code,
+              photo_role,
+              photo_hash_sha256,
+              photo_filename,
+              photo_relpath,
+              photo_path,
+              quality_flags,
+              captured_at_utc
             from photos
             order by visit_id, photo_uuid
             """,
         )
+        lpi_dictionary = _rows(
+            conn,
+            """
+            select
+              lpi_code,
+              coalesce(lpi_display, lpi_label, lpi_name, label, lpi_code) as lpi_title,
+              asset_template_type,
+              category,
+              lpi_group,
+              version
+            from lpi_dictionary
+            where coalesce(lpi_code, '') <> ''
+            order by lpi_code
+            """,
+        )
     finally:
         conn.close()
-    return RealEstateSnapshot(visits=visits, assets=assets, observations=observations, photos=photos)
+    for asset in assets:
+        if not _clean_text(asset.get("asset_type")):
+            asset["asset_type"] = _clean_text(asset.get("asset_template_type"))
+        if not _clean_text(asset.get("asset_name")):
+            asset["asset_name"] = _clean_text(asset.get("asset_public_id")) or _clean_text(asset.get("asset_id"))
+    return RealEstateSnapshot(
+        visits=visits,
+        assets=assets,
+        observations=observations,
+        photos=photos,
+        lpi_dictionary=lpi_dictionary,
+    )
+
+
+def build_real_estate_workspace(snapshot: RealEstateSnapshot, visit_id: str) -> dict[str, Any] | None:
+    visit = next((item for item in snapshot.visits if item.get("visit_id") == visit_id), None)
+    if not visit:
+        return None
+
+    asset = next((item for item in snapshot.assets if item.get("asset_id") == visit.get("asset_id")), None)
+    observations = [item for item in snapshot.observations if item.get("visit_id") == visit_id]
+    photos = [item for item in snapshot.photos if item.get("visit_id") == visit_id]
+    lpi_by_code = {str(item.get("lpi_code") or ""): item for item in snapshot.lpi_dictionary}
+
+    for obs in observations:
+        lpi_code = _clean_text(obs.get("lpi_code"))
+        obs["lpi_title"] = _clean_text(lpi_by_code.get(lpi_code, {}).get("lpi_title"))
+        obs["severity_0_5"] = int(obs.get("severity_0_5") or 0)
+        obs["min_photos_required"] = int(obs.get("min_photos_required") or (3 if obs["severity_0_5"] >= 3 else 1))
+        obs["out_of_scope_flag"] = int(obs.get("out_of_scope_flag") or 0)
+
+    photo_counts: dict[str, int] = {}
+    for photo in photos:
+        key = _clean_text(photo.get("record_uuid"))
+        photo_counts[key] = photo_counts.get(key, 0) + 1
+
+    total_required = sum(int(item.get("min_photos_required") or 0) for item in observations)
+    total_present = len(photos)
+    all_observations_have_lpi = all(bool(_clean_text(item.get("lpi_code"))) for item in observations) if observations else False
+    root_ready = bool(_clean_text(visit.get("root_hash_sha256")))
+    issuance_ready = (
+        bool(observations)
+        and bool(photos)
+        and all_observations_have_lpi
+        and total_present >= total_required
+    )
+
+    return {
+        "visit": visit,
+        "asset": asset or {},
+        "observations": observations,
+        "photos": photos,
+        "photo_counts_by_record": photo_counts,
+        "total_required_photos": total_required,
+        "total_present_photos": total_present,
+        "all_observations_have_lpi": all_observations_have_lpi,
+        "issuance_ready": issuance_ready,
+        "already_issued": root_ready,
+        "lpi_dictionary_size": len(snapshot.lpi_dictionary),
+    }
 
 
 def build_real_estate_end_to_end_preview(snapshot: RealEstateSnapshot, visit_id: str) -> dict[str, Any] | None:

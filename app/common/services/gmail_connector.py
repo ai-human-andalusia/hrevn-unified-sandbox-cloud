@@ -12,6 +12,9 @@ class MailConnectorStatus:
     gmail_oauth_ready: bool
     smtp_ready: bool
     preferred_channel: str
+    outbound_ready: bool
+    recovery_ready: bool
+    inbound_sync_ready: bool
 
 
 def get_mail_connector_status(cfg: CommonConfig) -> MailConnectorStatus:
@@ -33,4 +36,7 @@ def get_mail_connector_status(cfg: CommonConfig) -> MailConnectorStatus:
         gmail_oauth_ready=gmail_ready,
         smtp_ready=smtp_ready,
         preferred_channel=preferred,
+        outbound_ready=(gmail_ready or smtp_ready),
+        recovery_ready=(gmail_ready or smtp_ready) and bool(cfg.mail_from or cfg.notify_email),
+        inbound_sync_ready=gmail_ready and bool(cfg.gmail_mailbox_user),
     )

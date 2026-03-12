@@ -65,12 +65,15 @@ class CommonConfig:
     gmail_client_secret_set: bool
     gmail_refresh_token_set: bool
     gmail_mailbox_user: str
+    gmail_sync_query: str
 
     smtp_enabled: bool
     smtp_host: str
     smtp_port: int
     smtp_user_set: bool
     smtp_pass_set: bool
+    mail_from: str
+    notify_email: str
 
     # GitHub
     github_enabled: bool
@@ -83,6 +86,11 @@ class CommonConfig:
     telegram_enabled: bool
     telegram_bot_token_set: bool
     telegram_chat_id_set: bool
+
+    # Blockchain
+    blockchain_enabled: bool
+    blockchain_network: str
+    blockchain_target: str
 
 
 def load_common_config() -> CommonConfig:
@@ -105,11 +113,14 @@ def load_common_config() -> CommonConfig:
         gmail_client_secret_set=bool(env.get("GMAIL_CLIENT_SECRET", "").strip()),
         gmail_refresh_token_set=bool(env.get("GMAIL_REFRESH_TOKEN", "").strip()),
         gmail_mailbox_user=env.get("GMAIL_MAILBOX_USER", "me").strip() or "me",
+        gmail_sync_query=env.get("GMAIL_SYNC_QUERY", "is:unread").strip() or "is:unread",
         smtp_enabled=_as_bool(env.get("SMTP_ENABLED"), default=True),
         smtp_host=env.get("SMTP_HOST", "").strip(),
         smtp_port=int(env.get("SMTP_PORT", "587") or "587"),
         smtp_user_set=bool(env.get("SMTP_USER", "").strip()),
         smtp_pass_set=bool(env.get("SMTP_PASS", "").strip()),
+        mail_from=env.get("MAIL_FROM", "").strip(),
+        notify_email=env.get("NOTIFY_EMAIL", "").strip(),
         github_enabled=_as_bool(env.get("GITHUB_ENABLED"), default=True),
         github_repo=env.get("GITHUB_REPO", "").strip(),
         github_remote_url=env.get("GITHUB_REMOTE_URL", "").strip(),
@@ -118,4 +129,7 @@ def load_common_config() -> CommonConfig:
         telegram_enabled=_as_bool(env.get("TELEGRAM_ENABLED"), default=False),
         telegram_bot_token_set=bool(env.get("TELEGRAM_BOT_TOKEN", "").strip()),
         telegram_chat_id_set=bool(env.get("TELEGRAM_CHAT_ID", "").strip()),
+        blockchain_enabled=_as_bool(env.get("BLOCKCHAIN_ENABLED"), default=True),
+        blockchain_network=env.get("BLOCKCHAIN_NETWORK", "ethereum_sepolia").strip() or "ethereum_sepolia",
+        blockchain_target=env.get("BLOCKCHAIN_TARGET", "sepolia").strip() or "sepolia",
     )

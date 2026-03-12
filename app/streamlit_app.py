@@ -16,7 +16,10 @@ from common.security import evaluate_secret_posture, redact_config_for_ui
 from common.services.ai_router import choose_ai_provider
 from common.services.gmail_connector import get_mail_connector_status
 from common.services.github_connector import get_github_connector_status
-from common.services.real_estate_sqlite import load_real_estate_snapshot
+from common.services.real_estate_sqlite import (
+    build_real_estate_workspace,
+    load_real_estate_snapshot,
+)
 from common.services.telegram_connector import (
     get_telegram_connector_status,
     send_controlled_test_message,
@@ -58,10 +61,13 @@ class AuthShellConfig:
 class RealEstateReadiness:
     observation_count: int
     photo_count: int
+    required_photo_count: int
     all_observations_have_lpi: bool
     min_photos_ok: bool
     naming_policy_ready: bool
     ai_gate_ready: bool
+    already_issued: bool
+    lpi_dictionary_size: int
     issuance_ready: bool
 
 
@@ -312,32 +318,28 @@ def _prepare_real_estate_context(snapshot, visit_id: str) -> dict:
     }
 
 
-def _build_real_estate_readiness(context: dict) -> RealEstateReadiness:
+def _build_real_estate_readiness(context: dict, workspace: dict | None) -> RealEstateReadiness:
     observations = context["selected_observations"]
     photos = context["selected_photos"]
-    all_observations_have_lpi = all(bool((item.get("lpi_code") or "").strip()) for item in observations) if observations else False
-    min_required = 0
-    for item in observations:
-        sev = int(item.get("severity_0_5") or 0)
-        min_required += 3 if sev >= 3 else 1
-    min_photos_ok = len(photos) >= min_required if observations else False
+    all_observations_have_lpi = bool(workspace.get("all_observations_have_lpi")) if workspace else False
+    required_photos = int(workspace.get("total_required_photos") or 0) if workspace else 0
+    present_photos = int(workspace.get("total_present_photos") or len(photos)) if workspace else len(photos)
+    min_photos_ok = present_photos >= required_photos if observations else False
     naming_policy_ready = bool(context["selected_visit"]) and bool(context["selected_asset"])
     ai_gate_ready = len(photos) > 0
-    issuance_ready = all([
-        len(observations) > 0,
-        len(photos) > 0,
-        all_observations_have_lpi,
-        min_photos_ok,
-        naming_policy_ready,
-        ai_gate_ready,
-    ])
+    already_issued = bool(workspace.get("already_issued")) if workspace else False
+    lpi_dictionary_size = int(workspace.get("lpi_dictionary_size") or 0) if workspace else 0
+    issuance_ready = bool(workspace.get("issuance_ready")) if workspace else False
     return RealEstateReadiness(
         observation_count=len(observations),
         photo_count=len(photos),
+        required_photo_count=required_photos,
         all_observations_have_lpi=all_observations_have_lpi,
         min_photos_ok=min_photos_ok,
         naming_policy_ready=naming_policy_ready,
         ai_gate_ready=ai_gate_ready,
+        already_issued=already_issued,
+        lpi_dictionary_size=lpi_dictionary_size,
         issuance_ready=issuance_ready,
     )
 
@@ -367,12 +369,14 @@ def _render_real_estate_overview(snapshot, context: dict, readiness: RealEstateR
         st.write({"cities": cities, "asset_count": len(assets), "visit_count": len(sessions)})
 
 
-def _render_real_estate_workspace(context: dict, readiness: RealEstateReadiness) -> None:
-    visit = context["selected_visit"] or {}
-    asset = context["selected_asset"] or {}
-    observations = context["selected_observations"]
-    photos = context["selected_photos"]
+def _render_real_estate_workspace(context: dict, workspace: dict | None, readiness: RealEstateReadiness, cfg) -> None:
+    workspace = workspace or {}
+    visit = workspace.get("visit") or context["selected_visit"] or {}
+    asset = workspace.get("asset") or context["selected_asset"] or {}
+    observations = workspace.get("observations") or context["selected_observations"]
+    photos = workspace.get("photos") or context["selected_photos"]
     severity_counts = context["severity_counts"]
+    photo_counts = workspace.get("photo_counts_by_record") or {}
 
     header_left, header_right = st.columns([1.2, 0.8])
     with header_left:
@@ -385,7 +389,9 @@ def _render_real_estate_workspace(context: dict, readiness: RealEstateReadiness)
                 "visit_date_utc": visit.get("visit_date_utc"),
                 "inspector_name": visit.get("inspector_name"),
                 "client_name": asset.get("client_name"),
+                "asset_name": asset.get("asset_name"),
                 "asset_city": asset.get("asset_city"),
+                "asset_type": asset.get("asset_type") or asset.get("asset_template_type"),
             }
         )
     with header_right:
@@ -393,13 +399,18 @@ def _render_real_estate_workspace(context: dict, readiness: RealEstateReadiness)
         st.write(
             {
                 "all_observations_have_lpi": readiness.all_observations_have_lpi,
+                "required_photos_total": readiness.required_photo_count,
+                "present_photos_total": readiness.photo_count,
                 "minimum_photo_rule_ok": readiness.min_photos_ok,
                 "naming_policy_ready": readiness.naming_policy_ready,
                 "ai_gate_ready": readiness.ai_gate_ready,
+                "already_issued": readiness.already_issued,
                 "issuance_ready": readiness.issuance_ready,
             }
         )
-        if readiness.issuance_ready:
+        if readiness.already_issued:
+            st.info("This visit already has issuance traces recorded in the SQLite snapshot.")
+        elif readiness.issuance_ready:
             st.success("This visit is structurally ready for the issuance stage.")
         else:
             st.warning("This visit still needs one or more readiness conditions before issuance.")
@@ -408,42 +419,83 @@ def _render_real_estate_workspace(context: dict, readiness: RealEstateReadiness)
     with obs_col:
         st.markdown("### Observation list")
         if observations:
-            labels = [f"{item.get('record_uuid')} | {item.get('lpi_code') or '-'} | sev {item.get('severity_0_5') or 0}" for item in observations]
+            labels = [
+                f"{item.get('record_uuid')} | {item.get('lpi_code') or '-'} | {item.get('lpi_title') or 'untitled'} | sev {item.get('severity_0_5') or 0}"
+                for item in observations
+            ]
             selected_label = st.selectbox("Select observation", labels, key="workspace_observation")
             selected_id = selected_label.split(" | ")[0]
             selected_observation = next((item for item in observations if item.get("record_uuid") == selected_id), observations[0])
-            st.dataframe(observations, use_container_width=True)
+            st.dataframe(
+                [
+                    {
+                        "record_uuid": item.get("record_uuid"),
+                        "lpi_code": item.get("lpi_code"),
+                        "lpi_title": item.get("lpi_title"),
+                        "severity_0_5": item.get("severity_0_5"),
+                        "min_photos_required": item.get("min_photos_required"),
+                        "photos_for_observation": photo_counts.get(str(item.get("record_uuid") or ""), 0),
+                        "review_status": item.get("review_status"),
+                        "row_status": item.get("row_status"),
+                    }
+                    for item in observations
+                ],
+                use_container_width=True,
+            )
         else:
             selected_observation = {}
             st.info("No observations found for this visit.")
     with detail_col:
         st.markdown("### Observation detail")
         if selected_observation:
-            st.text_input("record_uuid", value=str(selected_observation.get("record_uuid") or ""), disabled=True)
+            record_uuid = str(selected_observation.get("record_uuid") or "")
+            st.text_input("record_uuid", value=record_uuid, disabled=True)
             st.text_input("lpi_code", value=str(selected_observation.get("lpi_code") or ""), disabled=True)
+            st.text_input("lpi_title", value=str(selected_observation.get("lpi_title") or ""), disabled=True)
             st.number_input("severity_0_5", min_value=0, max_value=5, value=int(selected_observation.get("severity_0_5") or 0), disabled=True)
+            st.number_input("min_photos_required", min_value=0, max_value=50, value=int(selected_observation.get("min_photos_required") or 0), disabled=True)
+            st.number_input("photos_for_observation", min_value=0, max_value=50, value=int(photo_counts.get(record_uuid, 0)), disabled=True)
+            st.text_input("review_status", value=str(selected_observation.get("review_status") or ""), disabled=True)
+            st.text_input("row_status", value=str(selected_observation.get("row_status") or ""), disabled=True)
             st.text_area("observation_description", value=str(selected_observation.get("observation_description") or ""), height=140, disabled=True)
             st.text_area("coordinator_notes", value=str(selected_observation.get("coordinator_notes") or ""), height=120, disabled=True)
+            if int(selected_observation.get("out_of_scope_flag") or 0):
+                st.warning(f"Out of scope: {selected_observation.get('out_of_scope_reason') or 'no reason provided'}")
         st.markdown("### Severity mix")
         st.write(severity_counts or {"no_data": 0})
 
     photo_col, ai_col = st.columns([1.1, 0.9])
     with photo_col:
         st.markdown("### Photo queue")
-        st.dataframe(photos, use_container_width=True)
+        st.dataframe(
+            [
+                {
+                    "photo_uuid": item.get("photo_uuid"),
+                    "record_uuid": item.get("record_uuid"),
+                    "photo_role": item.get("photo_role"),
+                    "photo_filename": item.get("photo_filename"),
+                    "quality_flags": item.get("quality_flags"),
+                    "captured_at_utc": item.get("captured_at_utc"),
+                }
+                for item in photos
+            ],
+            use_container_width=True,
+        )
         next_number = len(photos) + 1
         preview_filename = f"{visit.get('asset_id') or 'AST'}_{visit.get('visit_id') or 'VIS'}_{next_number:03d}"
         st.text_input("Next technical filename preview", value=preview_filename, disabled=True)
+        st.caption("Technical filename stays vertical-specific. Semantic title remains an AI suggestion layer.")
     with ai_col:
         st.markdown("### AI review state")
         quality_state = "ready_for_review" if photos else "blocked_no_photos"
         st.write(
             {
-                "provider": choose_ai_provider(load_common_config()).selected,
+                "provider": choose_ai_provider(cfg).selected,
                 "review_state": quality_state,
                 "blocking_policy": "block_if_inconsistencies_detected",
                 "semantic_titles_mode": "planned_common_contract",
                 "delivery_mode": "async_after_finalize",
+                "blockchain_target": cfg.blockchain_target,
             }
         )
         if photos:
@@ -452,7 +504,7 @@ def _render_real_estate_workspace(context: dict, readiness: RealEstateReadiness)
 
     st.markdown("### Finalization behavior")
     st.info(
-        "Target V1 behavior: when the operator finalizes the visit, the system moves to async issuance, runs AI pre-issuance checks, and delivers the certificate by email when ready."
+        "Target V1 behavior: when the operator finalizes the visit, the system moves to async issuance, runs AI pre-issuance checks, and delivers the certificate by email when ready. Anchoring remains configured against the selected blockchain target."
     )
 
 
@@ -642,6 +694,7 @@ def render_real_estate_vertical() -> None:
         st.error("Real Estate SQLite snapshot not available.")
         return
 
+    cfg = load_common_config()
     snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
     visit_ids = [item.get("visit_id") for item in snapshot.visits if isinstance(item, dict) and item.get("visit_id")]
     if not visit_ids:
@@ -650,7 +703,8 @@ def render_real_estate_vertical() -> None:
 
     selected_visit = st.selectbox("Selected visit", options=visit_ids)
     context = _prepare_real_estate_context(snapshot, selected_visit)
-    readiness = _build_real_estate_readiness(context)
+    workspace = build_real_estate_workspace(snapshot, selected_visit)
+    readiness = _build_real_estate_readiness(context, workspace)
 
     tab_overview, tab_workspace, tab_a, tab_b, tab_c = st.tabs(
         [
@@ -665,7 +719,7 @@ def render_real_estate_vertical() -> None:
     with tab_overview:
         _render_real_estate_overview(snapshot, context, readiness)
     with tab_workspace:
-        _render_real_estate_workspace(context, readiness)
+        _render_real_estate_workspace(context, workspace, readiness, cfg)
     with tab_a:
         _render_legacy_panel_a(context)
     with tab_b:
@@ -825,6 +879,9 @@ def render_dry_run_dashboard() -> None:
         {
             "gmail_oauth_ready": mail.gmail_oauth_ready,
             "smtp_ready": mail.smtp_ready,
+            "outbound_ready": mail.outbound_ready,
+            "recovery_ready": mail.recovery_ready,
+            "inbound_sync_ready": mail.inbound_sync_ready,
             "github_repo_ref_set": gh.repo_ref_set,
             "github_token_set": gh.token_set,
             "github_branch": gh.branch,
@@ -832,6 +889,18 @@ def render_dry_run_dashboard() -> None:
             "telegram_bot_token_set": tg.bot_token_set,
             "telegram_chat_id_set": tg.chat_id_set,
             "telegram_ready": tg.ready,
+        }
+    )
+
+    st.write("Platform operations readiness")
+    st.json(
+        {
+            "mail_from_configured": bool(cfg.mail_from),
+            "notify_email_configured": bool(cfg.notify_email),
+            "gmail_sync_query": cfg.gmail_sync_query,
+            "blockchain_enabled": cfg.blockchain_enabled,
+            "blockchain_network": cfg.blockchain_network,
+            "blockchain_target": cfg.blockchain_target,
         }
     )
 
