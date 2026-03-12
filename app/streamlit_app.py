@@ -821,10 +821,11 @@ def render_controlled_actions_vertical() -> None:
             },
         )
         selected_indices = [idx for idx, row in edited_rows.iterrows() if bool(row.get("OPEN"))]
+        multi_open_conflict = len(selected_indices) > 1
         if selected_indices:
             chosen_idx = selected_indices[-1]
             new_selected_id = records[int(chosen_idx)]["record_id"]
-            if new_selected_id != current_selected_id or len(selected_indices) > 1:
+            if new_selected_id != current_selected_id and not multi_open_conflict:
                 st.session_state["agent_ops_selected_id"] = new_selected_id
                 st.rerun()
 
@@ -832,6 +833,24 @@ def render_controlled_actions_vertical() -> None:
     selected = next((item for item in records if item["record_id"] == current_selected_id), records[0])
 
     with header_container:
+        right_block = ""
+        if not multi_open_conflict:
+            right_block = f"""
+              <div class="agent-ops-status-row">
+                <div class="agent-ops-chip" style="background:{risk_color(selected['risk_level'])}">
+                  <div class="agent-ops-chip-label">Risk Level</div>
+                  <div class="agent-ops-chip-value">{selected['risk_level']}</div>
+                </div>
+                <div class="agent-ops-chip" style="background:{policy_color(selected['approval_policy'])}">
+                  <div class="agent-ops-chip-label">Approval Policy</div>
+                  <div class="agent-ops-chip-value">{selected['approval_policy']}</div>
+                </div>
+                <div class="agent-ops-chip" style="background:{status_color(selected['status'])}">
+                  <div class="agent-ops-chip-label">Status</div>
+                  <div class="agent-ops-chip-value">{_controlled_actions_status_label(selected['status'])}</div>
+                </div>
+              </div>
+            """
         st.markdown(
             f"""
             <div class="agent-ops-header">
@@ -849,24 +868,13 @@ def render_controlled_actions_vertical() -> None:
                   <div class="agent-ops-counter-value">{rejected_count}</div>
                 </div>
               </div>
-              <div class="agent-ops-status-row">
-                <div class="agent-ops-chip" style="background:{risk_color(selected['risk_level'])}">
-                  <div class="agent-ops-chip-label">Risk Level</div>
-                  <div class="agent-ops-chip-value">{selected['risk_level']}</div>
-                </div>
-                <div class="agent-ops-chip" style="background:{policy_color(selected['approval_policy'])}">
-                  <div class="agent-ops-chip-label">Approval Policy</div>
-                  <div class="agent-ops-chip-value">{selected['approval_policy']}</div>
-                </div>
-                <div class="agent-ops-chip" style="background:{status_color(selected['status'])}">
-                  <div class="agent-ops-chip-label">Status</div>
-                  <div class="agent-ops-chip-value">{_controlled_actions_status_label(selected['status'])}</div>
-                </div>
-              </div>
+              {right_block}
             </div>
             """,
             unsafe_allow_html=True,
         )
+        if multi_open_conflict:
+            st.caption("Leave only one OPEN row to view Risk Level, Approval Policy and Status.")
 
     with row_top_right:
         _render_panel_section_title("Proposed Operation")
