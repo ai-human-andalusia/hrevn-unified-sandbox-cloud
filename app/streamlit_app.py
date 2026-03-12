@@ -2225,6 +2225,46 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
         st.caption("Upload is disabled here. This panel is a visual recovery of the old operational layout.")
 
 
+def _render_rwa_placeholder() -> None:
+    left, right = st.columns(2)
+    with left:
+        st.markdown("#### Ficha de observación")
+        st.info("RWA workspace pending data model and SQLite foundation.")
+        st.selectbox(
+            "Observation record",
+            options=["No records yet"],
+            index=0,
+            disabled=True,
+            key="rwa_placeholder_observation",
+        )
+        st.text_area(
+            "Description",
+            value="",
+            height=140,
+            disabled=True,
+            key="rwa_placeholder_description",
+        )
+        st.text_area(
+            "Coordinator notes",
+            value="",
+            height=120,
+            disabled=True,
+            key="rwa_placeholder_notes",
+        )
+    with right:
+        st.markdown("#### Photos for current visit")
+        st.info("No RWA evidence loaded yet.")
+        st.metric("Registered photos", 0)
+        st.file_uploader(
+            "Upload photos",
+            type=["jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            disabled=True,
+            key="rwa_placeholder_uploader",
+        )
+        st.caption("This tab keeps the target layout only. RWA data and flows will be defined later.")
+
+
 def _render_legacy_panel_b(context: dict) -> None:
     st.markdown("### Legacy Panel B — Structured Data Entry Panel")
     st.caption("Recreated from `hrevn_panel_data_entry.py`. Shows the old staged flow: client -> asset -> visit -> observation -> photo -> emit S1.")
@@ -3515,20 +3555,7 @@ def main() -> None:
     with tab_actions:
         render_controlled_actions_vertical()
     with tab_rwa:
-        if not REAL_ESTATE_SQLITE_PATH.exists():
-            st.info("Real Estate snapshot not available yet.")
-        else:
-            rwa_snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
-            selected_visit = st.session_state.get("real_estate_selected_visit")
-            visit_ids = [str(visit.get("visit_id") or "") for visit in rwa_snapshot.visits if visit.get("visit_id")]
-            if visit_ids:
-                if selected_visit not in visit_ids:
-                    selected_visit = visit_ids[0]
-                    st.session_state["real_estate_selected_visit"] = selected_visit
-                rwa_context = _prepare_real_estate_context(rwa_snapshot, selected_visit)
-                _render_legacy_panel_a(rwa_context, key_prefix="legacy_a_rwa")
-            else:
-                st.info("No Real Estate visits available yet.")
+        _render_rwa_placeholder()
     with tab_arquitectura_status:
         render_dry_run_dashboard()
 
