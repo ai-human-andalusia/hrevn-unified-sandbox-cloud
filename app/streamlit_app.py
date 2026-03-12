@@ -1496,16 +1496,13 @@ def render_central_console() -> None:
         agent_snapshot = load_agent_operations_snapshot(AGENT_OPERATIONS_SQLITE_PATH)
 
         visits = real_estate_snapshot.visits
-        certificates = real_estate_snapshot.certificates
-        bundle_runs = real_estate_snapshot.bundle_runs
-
         total_visits = len(visits)
         review_visits = len([row for row in visits if str(row.get("review_status") or "").upper() not in {"", "APPROVED", "FINAL", "DONE"}])
         emitted_visits = len([row for row in visits if row.get("issued_at_utc") or str(row.get("certification_status") or "").upper() in {"ISSUED", "EMITTED", "CERTIFIED"}])
         in_process_visits = max(0, total_visits - emitted_visits - review_visits)
-        certificates_emitted = len(certificates)
-        zips_emitted = len(bundle_runs)
-        emails_emitted = len(bundle_runs)
+        certificates_emitted = 0
+        zips_emitted = 0
+        emails_emitted = 0
         verify_clicks = 0
         zip_downloads = 0
 
