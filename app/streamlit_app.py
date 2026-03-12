@@ -1767,21 +1767,35 @@ def render_central_console() -> None:
     production_tab, technical_tab = st.tabs([_t("production"), _t("technical_architecture")])
 
     with production_tab:
-        real_estate_snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
         agent_snapshot = load_agent_operations_snapshot(AGENT_OPERATIONS_SQLITE_PATH)
 
-        visits = real_estate_snapshot.visits
-        total_visits = len(visits)
-        review_visits = len([row for row in visits if str(row.get("review_status") or "").upper() not in {"", "APPROVED", "FINAL", "DONE"}])
-        certificates_emitted = 0
-        zips_emitted = 0
-        emails_emitted = 0
-        verify_clicks = 0
-        zip_downloads = 0
+        re_accounts = list_re_v2_accounts()
+        re_visits = list_re_v2_visits_raw()
+        re_assets = list_re_v2_assets()
+
+        building_admin_account_ids = {
+            str(row.get("account_id") or "") for row in re_accounts if str(row.get("subgroup") or "") == "building_admin"
+        }
+        property_manager_account_ids = {
+            str(row.get("account_id") or "") for row in re_accounts if str(row.get("subgroup") or "") == "property_manager"
+        }
+
+        building_admin_visits = [
+            row for row in re_visits if str(row.get("created_by_account_id") or "") in building_admin_account_ids
+        ]
+        property_manager_visits = [
+            row for row in re_visits if str(row.get("created_by_account_id") or "") in property_manager_account_ids
+        ]
+
+        def _review_count(rows: list[dict]) -> int:
+            return len([
+                row for row in rows
+                if str(row.get("review_status") or "").upper() not in {"", "APPROVED", "FINAL", "DONE"}
+            ])
 
         production_rows = [
-            {"VERTICAL": "REAL ESTATE", "LINE": "Administradores de fincas", "EVENTS / VISITS": total_visits, "IN REVIEW": review_visits, "CERTIFICATES": certificates_emitted, "ZIPS": zips_emitted, "EMAILS": emails_emitted, "VERIFY": verify_clicks, "ZIP DOWNLOADS": zip_downloads, "FACTURATION": 0},
-            {"VERTICAL": "REAL ESTATE", "LINE": "Property Manager", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0, "FACTURATION": 0},
+            {"VERTICAL": "REAL ESTATE", "LINE": "Administradores de fincas", "EVENTS / VISITS": len(building_admin_visits), "IN REVIEW": _review_count(building_admin_visits), "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0, "FACTURATION": 0},
+            {"VERTICAL": "REAL ESTATE", "LINE": "Property Manager", "EVENTS / VISITS": len(property_manager_visits), "IN REVIEW": _review_count(property_manager_visits), "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0, "FACTURATION": 0},
             {"VERTICAL": "REAL ESTATE", "LINE": "Family Office", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0, "FACTURATION": 0},
             {"VERTICAL": "REAL ESTATE", "LINE": "Fondos de inversión", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0, "FACTURATION": 0},
             {"VERTICAL": "ADMINISTRATION", "LINE": "Fotovoltaica", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0, "FACTURATION": 0},
