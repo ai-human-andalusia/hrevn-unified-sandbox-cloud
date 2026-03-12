@@ -76,6 +76,27 @@ class RealEstateReadiness:
     issuance_ready: bool
 
 
+def _render_global_table_style() -> None:
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stDataFrame"] [role="columnheader"] {
+            text-transform: uppercase !important;
+            letter-spacing: 0.06em;
+            font-size: 0.72rem !important;
+            font-weight: 700 !important;
+            font-family: 'SFMono-Regular', Menlo, Consolas, monospace !important;
+        }
+        div[data-testid="stDataFrame"] [role="gridcell"] {
+            font-size: 0.8rem !important;
+            font-family: 'SFMono-Regular', Menlo, Consolas, monospace !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _safe_read(path: Path, max_chars: int = 12000) -> str:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -748,6 +769,9 @@ def render_controlled_actions_vertical() -> None:
     if "agent_ops_selected_id" not in st.session_state:
         st.session_state["agent_ops_selected_id"] = records[0]["record_id"]
 
+    selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
+    selected = next((item for item in records if item["record_id"] == selected_id), records[0])
+
     pending_count = sum(1 for item in records if item["status"] == "pending_review")
     accepted_count = sum(1 for item in records if item["status"] in {"approved_for_execution", "executed_sealed"})
     rejected_count = sum(1 for item in records if item["status"] == "rejected")
@@ -764,17 +788,6 @@ def render_controlled_actions_vertical() -> None:
         .agent-ops-chip {{min-width:116px;padding:8px 10px;border-radius:10px;color:#fff;}}
         .agent-ops-chip-label {{font-size:0.66rem;opacity:0.92;text-transform:uppercase;letter-spacing:0.04em;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}}
         .agent-ops-chip-value {{font-size:0.8rem;font-weight:700;line-height:1.2;margin-top:4px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}}
-        div[data-testid="stDataFrame"] [role="columnheader"] {{
-            text-transform:uppercase !important;
-            letter-spacing:0.06em;
-            font-size:0.72rem !important;
-            font-weight:700 !important;
-            font-family:'SFMono-Regular',Menlo,Consolas,monospace !important;
-        }}
-        div[data-testid="stDataFrame"] [role="gridcell"] {{
-            font-size:0.8rem !important;
-            font-family:'SFMono-Regular',Menlo,Consolas,monospace !important;
-        }}
         </style>
         <div class="agent-ops-header">
           <div class="agent-ops-counter-row">
@@ -791,7 +804,20 @@ def render_controlled_actions_vertical() -> None:
               <div class="agent-ops-counter-value">{rejected_count}</div>
             </div>
           </div>
-          <div class="agent-ops-status-row" id="agent-ops-status-row"></div>
+          <div class="agent-ops-status-row">
+            <div class="agent-ops-chip" style="background:{risk_color(selected['risk_level'])}">
+              <div class="agent-ops-chip-label">Risk Level</div>
+              <div class="agent-ops-chip-value">{selected['risk_level']}</div>
+            </div>
+            <div class="agent-ops-chip" style="background:{policy_color(selected['approval_policy'])}">
+              <div class="agent-ops-chip-label">Approval Policy</div>
+              <div class="agent-ops-chip-value">{selected['approval_policy']}</div>
+            </div>
+            <div class="agent-ops-chip" style="background:{status_color(selected['status'])}">
+              <div class="agent-ops-chip-label">Status</div>
+              <div class="agent-ops-chip-value">{_controlled_actions_status_label(selected['status'])}</div>
+            </div>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -822,33 +848,14 @@ def render_controlled_actions_vertical() -> None:
             selected_row_idx = selected_rows[0]
             st.session_state["agent_ops_selected_id"] = records[selected_row_idx]["record_id"]
 
-    selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
-    selected = next((item for item in records if item["record_id"] == selected_id), records[0])
-
-    st.markdown(
-        f"""
-        <script>
-        const row = window.parent.document.getElementById('agent-ops-status-row');
-        if (row) {{
-          row.innerHTML = `
-            <div class="agent-ops-chip" style="background:{risk_color(selected['risk_level'])}">
-              <div class="agent-ops-chip-label">Risk Level</div>
-              <div class="agent-ops-chip-value">{selected['risk_level']}</div>
-            </div>
-            <div class="agent-ops-chip" style="background:{policy_color(selected['approval_policy'])}">
-              <div class="agent-ops-chip-label">Approval Policy</div>
-              <div class="agent-ops-chip-value">{selected['approval_policy']}</div>
-            </div>
-            <div class="agent-ops-chip" style="background:{status_color(selected['status'])}">
-              <div class="agent-ops-chip-label">Status</div>
-              <div class="agent-ops-chip-value">{_controlled_actions_status_label(selected['status'])}</div>
-            </div>`;
-        }}
-        </script>
-        <div class="agent-ops-status-row" style="display:none"></div>
-        """,
-        unsafe_allow_html=True,
-    )
+    current_selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
+    selected = next((item for item in records if item["record_id"] == current_selected_id), records[0])
+    if selected_rows:
+        selected_row_idx = selected_rows[0]
+        new_selected_id = records[selected_row_idx]["record_id"]
+        if new_selected_id != current_selected_id:
+            st.session_state["agent_ops_selected_id"] = new_selected_id
+            st.rerun()
 
     with row_top_right:
         _render_panel_section_title("Proposed Operation")
@@ -1094,6 +1101,7 @@ def render_dry_run_dashboard() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="HREVN Sandbox — Documentary Panels", layout="wide", initial_sidebar_state="collapsed")
+    _render_global_table_style()
     _render_auth_shell()
 
     head_left, head_right = st.columns([0.84, 0.16])
