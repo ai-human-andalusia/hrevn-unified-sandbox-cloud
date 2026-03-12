@@ -6,6 +6,7 @@ No real access, no external source systems, documentary-safe views only.
 from __future__ import annotations
 
 import json
+import sqlite3
 import pandas as pd
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,6 +79,10 @@ APP_DATA_DIR = ROOT / "app" / "data"
 REAL_ESTATE_SQLITE_PATH = APP_DATA_DIR / "real_estate" / "hrevn_real_estate.db"
 AGENT_OPERATIONS_SQLITE_PATH = APP_DATA_DIR / "agent_operations" / "hrevn_agent_operations.db"
 AUTH_ACCESS_SQLITE_PATH = APP_DATA_DIR / "auth" / "hrevn_auth_access.db"
+
+LEGACY_REAL_ESTATE_ROOT = Path("/Users/miguelmiguel/CODEX/HREVN CODEX REAL ESTATE")
+LEGACY_GOV_ROOT = Path("/Users/miguelmiguel/CODEX/HREVN CODEX GOV")
+LEGACY_PTDG_ROOT = Path("/Users/miguelmiguel/CODEX/Physical-to-Digital Gap")
 
 
 def _render_console_table_html(df: pd.DataFrame, *, total_row_index: int | None = None) -> None:
@@ -672,16 +677,28 @@ def _render_auth_shell() -> None:
                 st.session_state["main_tab_target"] = "access_security"
                 st.rerun()
             st.sidebar.markdown(f"#### {_t("verticals")}")
-            st.sidebar.button(_t("real_estate"), disabled=True, use_container_width=True)
-            st.sidebar.button(_t("gov_photovoltaic"), disabled=True, use_container_width=True)
-            st.sidebar.button(_t("graphic_evidence"), disabled=True, use_container_width=True)
-            st.sidebar.button(_t("genius_operations"), disabled=True, use_container_width=True)
+            if st.sidebar.button(_t("real_estate"), use_container_width=True):
+                st.session_state["main_tab_target"] = "real_estate"
+                st.rerun()
+            if st.sidebar.button(_t("gov_photovoltaic"), use_container_width=True):
+                st.session_state["main_tab_target"] = "gov_photovoltaic"
+                st.rerun()
+            if st.sidebar.button(_t("graphic_evidence"), use_container_width=True):
+                st.session_state["main_tab_target"] = "graphic_evidence"
+                st.rerun()
+            if st.sidebar.button(_t("genius_operations"), use_container_width=True):
+                st.session_state["main_tab_target"] = "genius_operations"
+                st.rerun()
             if st.sidebar.button(_t("agent_operations"), use_container_width=True):
                 st.session_state["main_tab_target"] = "agent_operations"
                 st.rerun()
             st.sidebar.markdown(f"#### {_t("communications")}")
-            st.sidebar.button(_t("email"), disabled=True, use_container_width=True)
-            st.sidebar.button(_t("telegram"), disabled=True, use_container_width=True)
+            if st.sidebar.button(_t("email"), use_container_width=True):
+                st.session_state["main_tab_target"] = "email"
+                st.rerun()
+            if st.sidebar.button(_t("telegram"), use_container_width=True):
+                st.session_state["main_tab_target"] = "telegram"
+                st.rerun()
         return
 
     language_left, _language_spacer = st.columns([0.4, 0.6])
@@ -2644,6 +2661,171 @@ def render_real_estate_vertical() -> None:
         _render_legacy_panel_c(context)
 
 
+def _count_sqlite_rows(db_path: Path, table_name: str) -> int:
+    if not db_path.exists():
+        return 0
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            row = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+            return int(row[0] or 0) if row else 0
+    except Exception:
+        return 0
+
+
+def _load_legacy_email_rows(limit: int = 40) -> list[dict]:
+    storage_dir = LEGACY_PTDG_ROOT / "storage" / "emails"
+    rows: list[dict] = []
+    if not storage_dir.exists():
+        return rows
+    for path in sorted(storage_dir.glob("*.json"), reverse=True)[:limit]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            continue
+        subject = str(payload.get("subject") or "")
+        body = str(payload.get("text") or "")
+        low = f"{subject} {body}".lower()
+        if any(token in low for token in ["support", "ticket", "incid", "error", "issue"]):
+            classification = "support"
+        elif any(token in low for token in ["invest", "opportun", "demo", "meeting", "proposal", "sales"]):
+            classification = "business"
+        else:
+            classification = "general"
+        rows.append({
+            "when": path.stem.split("-")[0] if path.stem else "-",
+            "to": payload.get("to") or "-",
+            "subject": subject or "-",
+            "classification": classification,
+            "attachments": len(payload.get("attachments") or []),
+        })
+    return rows
+
+
+def render_gov_photovoltaic_vertical() -> None:
+    st.subheader("GOV / Photovoltaic")
+    gov_db = LEGACY_GOV_ROOT / "hrevn_gov.db"
+    panel_file = LEGACY_GOV_ROOT / "python" / "hrevn_panel.py"
+    assets = _count_sqlite_rows(gov_db, "assets")
+    visits = _count_sqlite_rows(gov_db, "visits")
+    observations = _count_sqlite_rows(gov_db, "observations")
+    photos = _count_sqlite_rows(gov_db, "photos")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("ASSETS", assets)
+    c2.metric("VISITS", visits)
+    c3.metric("OBSERVATIONS", observations)
+    c4.metric("PHOTOS", photos)
+    left, right = st.columns([1.3, 1.0])
+    with left:
+        _render_panel_section_title("Recovered GOV workflow")
+        st.dataframe([
+            {"BLOCK": "Asset selection", "DETAIL": "Asset -> visit -> photovoltaic milestone flow"},
+            {"BLOCK": "Evidence milestones", "DETAIL": "Panels, inverter, electrical board, location, technical plate"},
+            {"BLOCK": "Geo capture", "DETAIL": "Last-known position, age and accuracy warnings"},
+            {"BLOCK": "AI review", "DETAIL": "Gemini/OpenAI review hook before issuance"},
+            {"BLOCK": "Delivery", "DETAIL": "Baseline, certificate, manifest, bundle and email"},
+        ], use_container_width=True, hide_index=True)
+    with right:
+        _render_panel_section_title("Legacy source")
+        st.dataframe([
+            {"FILE": "python/hrevn_panel.py", "STATE": "recovered" if panel_file.exists() else "missing"},
+            {"FILE": "python/hrevn_generate_baseline_gov.py", "STATE": "recovered" if (LEGACY_GOV_ROOT / "python" / "hrevn_generate_baseline_gov.py").exists() else "missing"},
+            {"FILE": "python/hrevn_generate_certificate_gov.py", "STATE": "recovered" if (LEGACY_GOV_ROOT / "python" / "hrevn_generate_certificate_gov.py").exists() else "missing"},
+        ], use_container_width=True, hide_index=True)
+    st.markdown("##### Operational parameters")
+    st.dataframe([
+        {"PARAMETER": "Required milestones", "VALUE": "Panels / inverter / electrical board / location"},
+        {"PARAMETER": "Photos per milestone", "VALUE": "Up to 10"},
+        {"PARAMETER": "Geo warnings", "VALUE": "Stale position and low accuracy"},
+        {"PARAMETER": "Emission mode", "VALUE": "SQLite backend with issuance bundle outputs"},
+    ], use_container_width=True, hide_index=True)
+
+
+def render_graphic_evidence_vertical() -> None:
+    st.subheader("Graphic Evidence")
+    evidence_root = LEGACY_PTDG_ROOT / "storage" / "evidence"
+    evidence_dirs = [p for p in evidence_root.iterdir() if p.is_dir()] if evidence_root.exists() else []
+    photo_count = 0
+    certificate_count = 0
+    manifest_count = 0
+    bundle_count = 0
+    for case_dir in evidence_dirs:
+        photo_count += len(list((case_dir / "photos").glob("*"))) if (case_dir / "photos").exists() else 0
+        certificate_count += 1 if (case_dir / "certificate.pdf").exists() else 0
+        manifest_count += 1 if (case_dir / "manifest.json").exists() else 0
+        bundle_count += 1 if (case_dir / "bundle.zip").exists() else 0
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("CASES", len(evidence_dirs))
+    c2.metric("PHOTOS", photo_count)
+    c3.metric("CERTIFICATES", certificate_count)
+    c4.metric("BUNDLES", bundle_count)
+    left, right = st.columns([1.2, 1.1])
+    with left:
+        _render_panel_section_title("Recovered capture flow")
+        st.dataframe([
+            {"STEP": "Capture", "DETAIL": "Simple photo-first evidence intake"},
+            {"STEP": "Review", "DETAIL": "Case-level review before certificate issue"},
+            {"STEP": "Package", "DETAIL": "Manifest + certificate + bundle.zip"},
+            {"STEP": "Delivery", "DETAIL": "Customer-facing download and verification flow"},
+        ], use_container_width=True, hide_index=True)
+    with right:
+        _render_panel_section_title("Recent evidence cases")
+        case_rows = []
+        for case_dir in sorted(evidence_dirs, reverse=True)[:8]:
+            case_rows.append({
+                "CASE": case_dir.name,
+                "PHOTOS": len(list((case_dir / "photos").glob("*"))) if (case_dir / "photos").exists() else 0,
+                "CERT": "yes" if (case_dir / "certificate.pdf").exists() else "no",
+                "BUNDLE": "yes" if (case_dir / "bundle.zip").exists() else "no",
+            })
+        st.dataframe(case_rows, use_container_width=True, hide_index=True)
+
+
+def render_email_panel() -> None:
+    st.subheader("Email")
+    rows = _load_legacy_email_rows()
+    support = [r for r in rows if r["classification"] == "support"]
+    business = [r for r in rows if r["classification"] == "business"]
+    general = [r for r in rows if r["classification"] == "general"]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("RECEIVED", len(rows))
+    c2.metric("SUPPORT", len(support))
+    c3.metric("BUSINESS", len(business))
+    c4.metric("GENERAL", len(general))
+    tab_all, tab_support, tab_business, tab_general = st.tabs(["All", "Support", "Business", "General"])
+    def _render_email_rows(items: list[dict]) -> None:
+        st.dataframe([
+            {"TO": r["to"], "SUBJECT": r["subject"], "CLASS": r["classification"], "ATTACH": r["attachments"]}
+            for r in items
+        ], use_container_width=True, hide_index=True)
+    with tab_all:
+        _render_email_rows(rows)
+    with tab_support:
+        _render_email_rows(support)
+    with tab_business:
+        _render_email_rows(business)
+    with tab_general:
+        _render_email_rows(general)
+
+
+def render_genius_operations_placeholder() -> None:
+    st.subheader("GENIUS Operations")
+    st.info("No recovered panel is linked here yet. This vertical remains pending first operational draft.")
+    st.dataframe([
+        {"STATE": "pending", "NEXT": "Define regulated operations scope"},
+        {"STATE": "pending", "NEXT": "Attach issuance and evidence profile"},
+        {"STATE": "pending", "NEXT": "Design operator and enterprise views"},
+    ], use_container_width=True, hide_index=True)
+
+
+def render_telegram_panel() -> None:
+    st.subheader("Telegram")
+    status = get_telegram_connector_status(load_common_config())
+    st.dataframe([
+        {"FIELD": "Enabled", "VALUE": "yes" if status.enabled else "no"},
+        {"FIELD": "Bot token", "VALUE": "set" if status.bot_token_set else "missing"},
+        {"FIELD": "Chat id", "VALUE": "set" if status.chat_id_set else "missing"},
+        {"FIELD": "Ready", "VALUE": "yes" if status.ready else "no"},
+    ], use_container_width=True, hide_index=True)
 def render_schema_explorer() -> None:
     st.subheader("Schema Explorer")
     st.caption("Read-only browsing of schema artifacts inside the sandbox.")
@@ -2782,14 +2964,31 @@ def main() -> None:
     target = st.session_state.get("main_tab_target")
 
     if target == "agent_operations":
-        top_left, top_right = st.columns([0.86, 0.14])
-        with top_left:
-            st.subheader("Agent Operations")
-        with top_right:
-            if st.button("Back to all panels", use_container_width=True):
-                st.session_state.pop("main_tab_target", None)
-                st.rerun()
         render_controlled_actions_vertical()
+        return
+
+    if target == "real_estate":
+        render_real_estate_vertical()
+        return
+
+    if target == "gov_photovoltaic":
+        render_gov_photovoltaic_vertical()
+        return
+
+    if target == "graphic_evidence":
+        render_graphic_evidence_vertical()
+        return
+
+    if target == "genius_operations":
+        render_genius_operations_placeholder()
+        return
+
+    if target == "email":
+        render_email_panel()
+        return
+
+    if target == "telegram":
+        render_telegram_panel()
         return
 
     if target == "central_console":
@@ -2797,13 +2996,6 @@ def main() -> None:
         return
 
     if target == "access_security":
-        top_left, top_right = st.columns([0.86, 0.14])
-        with top_left:
-            st.subheader("Access & Security")
-        with top_right:
-            if st.button("Back to all panels", use_container_width=True):
-                st.session_state.pop("main_tab_target", None)
-                st.rerun()
         render_access_security_panel()
         return
 
