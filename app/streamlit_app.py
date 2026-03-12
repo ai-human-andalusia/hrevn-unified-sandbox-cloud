@@ -698,7 +698,7 @@ def _init_controlled_actions_state() -> None:
             "tool_name": "Swift_Transfer_API",
             "risk_level": "HIGH",
             "approval_policy": "Treasury dual approval",
-            "review_reason": "Outgoing payment above policy threshold.",
+            "review_reason": "Regulated outbound payment exceeds policy threshold and requires human authorization.",
             "status": "pending_review",
             "human_action": "pending",
             "seal_status": "not_sealed",
@@ -719,7 +719,7 @@ def _init_controlled_actions_state() -> None:
             "tool_name": "IAM_Admin_API",
             "risk_level": "CRITICAL",
             "approval_policy": "CISO approval required",
-            "review_reason": "Administrative credential operation.",
+            "review_reason": "Privileged access action over an administrative identity requires formal authorization.",
             "status": "executed_sealed",
             "human_action": "approved",
             "seal_status": "sealed",
@@ -738,7 +738,7 @@ def _init_controlled_actions_state() -> None:
             "tool_name": "Chain_Freeze_API",
             "risk_level": "HIGH",
             "approval_policy": "Legal counsel review",
-            "review_reason": "Irreversible action over client funds.",
+            "review_reason": "Potentially irreversible regulated action over client funds requires legal review.",
             "status": "rejected",
             "human_action": "rejected",
             "seal_status": "sealed_rejection",
@@ -788,8 +788,8 @@ def _reject_controlled_action(record_id: str) -> None:
 
 def render_controlled_actions_vertical() -> None:
     _init_controlled_actions_state()
-    st.subheader("Controlled Actions Vertical")
-    st.caption("Review-ready records for sensitive operations that require human approval before execution.")
+    st.subheader("Agent Operations")
+    st.caption("Review-ready records for regulated AI operations that require human approval before execution.")
 
     events = st.session_state["controlled_actions_events"]
     records = list(events.values())
@@ -809,7 +809,7 @@ def render_controlled_actions_vertical() -> None:
             {
                 "Record": item["record_id"],
                 "Agent": item["agent_name"],
-                "Intent": item["intent"],
+                "Operation": item["intent"],
                 "Risk": item["risk_level"],
                 "Status": _controlled_actions_status_label(item["status"]),
             }
@@ -817,52 +817,53 @@ def render_controlled_actions_vertical() -> None:
         ]
         st.dataframe(table_rows, use_container_width=True, hide_index=True)
         labels = [f"{item['record_id']} | {_controlled_actions_status_label(item['status'])} | {item['intent']}" for item in records]
-        selected_label = st.radio("Select record", labels, key="controlled_actions_selected")
+        selected_label = st.radio("Select operation record", labels, key="controlled_actions_selected")
         selected_id = selected_label.split(" | ")[0]
         selected = events[selected_id]
 
     with detail_col:
-        st.markdown("### Auditor review record")
+        st.markdown("### Regulated operation review record")
         c1, c2, c3 = st.columns(3)
         c1.metric("Risk level", selected["risk_level"])
         c2.metric("Approval policy", selected["approval_policy"])
         c3.metric("Current status", _controlled_actions_status_label(selected["status"]))
 
-        st.markdown("### Why human review is required")
+        st.markdown("### Why regulatory review is required")
         st.info(selected["review_reason"])
 
         block_a, block_b = st.columns([1.1, 0.9])
         with block_a:
-            st.markdown("### Proposed action")
+            st.markdown("### Proposed operation")
             st.dataframe(
                 [
                     {"Field": "Record ID", "Value": selected["record_id"]},
                     {"Field": "Submitted at", "Value": selected["submitted_at_utc"]},
                     {"Field": "Agent", "Value": selected["agent_name"]},
-                    {"Field": "Intent", "Value": selected["intent"]},
+                    {"Field": "Operation", "Value": selected["intent"]},
                     {"Field": "Tool", "Value": selected["tool_name"]},
                 ],
                 use_container_width=True,
                 hide_index=True,
             )
-            st.markdown("#### Action parameters")
+            st.markdown("#### Operation parameters")
             st.dataframe(
                 [{"Parameter": row["field"], "Value": row["value"]} for row in selected["parameters"]],
                 use_container_width=True,
                 hide_index=True,
             )
         with block_b:
-            st.markdown("### Human approval")
+            st.markdown("### Human authorization")
             decision_rows = [
-                {"Control": "Human action", "State": selected["human_action"].replace("_", " ").title()},
+                {"Control": "Human authorization", "State": selected["human_action"].replace("_", " ").title()},
                 {"Control": "Recommended for execution", "State": "Yes" if selected["recommended_for_execution"] else "No"},
+                {"Control": "Regulated review path", "State": "Required"},
                 {"Control": "Seal status", "State": selected["seal_status"].replace("_", " ").title()},
             ]
             st.dataframe(decision_rows, use_container_width=True, hide_index=True)
             if selected["status"] == "pending_review":
                 btn1, btn2 = st.columns(2)
                 with btn1:
-                    if st.button("Approve and execute", type="primary", use_container_width=True, key=f"approve_{selected_id}"):
+                    if st.button("Authorize and execute", type="primary", use_container_width=True, key=f"approve_{selected_id}"):
                         _approve_controlled_action(selected_id)
                         st.rerun()
                 with btn2:
@@ -870,15 +871,15 @@ def render_controlled_actions_vertical() -> None:
                         _reject_controlled_action(selected_id)
                         st.rerun()
             elif selected["status"] == "executed_sealed":
-                st.success("Execution approved and sealed.")
+                st.success("Operation authorized, executed and sealed.")
             else:
-                st.error("Action rejected. Rejection record sealed.")
+                st.error("Operation rejected. Rejection record sealed.")
 
-        st.markdown("### Execution record and seal")
+        st.markdown("### Execution record and verification seal")
         seal_rows = [
             {"Field": "Seal reference", "Value": selected["seal_reference"] or "Pending decision"},
             {"Field": "Export package", "Value": "Ready" if selected["status"] != "pending_review" else "Waiting for human decision"},
-            {"Field": "Record type", "Value": "Controlled action review record"},
+            {"Field": "Record type", "Value": "Regulated AI operation review record"},
         ]
         st.dataframe(seal_rows, use_container_width=True, hide_index=True)
 
@@ -891,7 +892,7 @@ def render_controlled_actions_vertical() -> None:
                 f"Seal: {selected['seal_reference']}",
             ])
             st.download_button(
-                "Export review-ready package",
+                "Export regulated operation package",
                 data=export_text.encode("utf-8"),
                 file_name=f"{selected_id}_review_package.txt",
                 mime="text/plain",
@@ -1172,7 +1173,7 @@ def main() -> None:
     tab_re, tab_actions, tab_schema, tab_mapping, tab_dryrun = st.tabs(
         [
             "Real Estate Vertical",
-            "Controlled Actions",
+            "Agent Operations",
             "Schema Explorer",
             "Mapping Validator UI",
             "Dry-Run Convergence Dashboard",
