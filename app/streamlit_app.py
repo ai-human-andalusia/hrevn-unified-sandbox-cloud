@@ -2852,20 +2852,22 @@ def _render_real_estate_v2_builder() -> None:
             "Enterprises", "Accounts", "Assets", "Assignments", "Visits"
         ])
         with t_enterprises:
-            _render_panel_section_title("Recent enterprises")
             enterprise_rows = list_re_v2_enterprises()
-            st.dataframe(enterprise_rows, use_container_width=True, hide_index=True)
             enterprise_options = {row["enterprise_name"]: row["enterprise_id"] for row in enterprise_rows}
             if enterprise_options:
                 selected_enterprise_name = st.selectbox(
-                    "Filter by enterprise name",
+                    "Enterprise Name",
                     list(enterprise_options.keys()),
                     key="re_v2_recent_enterprise_filter",
+                    label_visibility="collapsed",
                 )
+                filtered_enterprise_rows = [row for row in enterprise_rows if row["enterprise_name"] == selected_enterprise_name]
+                st.dataframe(filtered_enterprise_rows, use_container_width=True, hide_index=True)
                 selected_enterprise_id = enterprise_options[selected_enterprise_name]
                 detail_rows = get_re_v2_enterprise_assignment_detail(selected_enterprise_id)
-                _render_panel_section_title("Enterprise detail")
                 st.dataframe(detail_rows, use_container_width=True, hide_index=True)
+            else:
+                st.dataframe([], use_container_width=True, hide_index=True)
         with t_accounts:
             _render_panel_section_title("Recent accounts")
             st.dataframe(list_re_v2_accounts(), use_container_width=True, hide_index=True)
