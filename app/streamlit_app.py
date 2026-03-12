@@ -769,26 +769,65 @@ def render_controlled_actions_vertical() -> None:
     if "agent_ops_selected_id" not in st.session_state:
         st.session_state["agent_ops_selected_id"] = records[0]["record_id"]
 
-    selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
-    selected = next((item for item in records if item["record_id"] == selected_id), records[0])
-
     pending_count = sum(1 for item in records if item["status"] == "pending_review")
     accepted_count = sum(1 for item in records if item["status"] in {"approved_for_execution", "executed_sealed"})
     rejected_count = sum(1 for item in records if item["status"] == "rejected")
 
     st.markdown(
-        f"""
+        """
         <style>
-        .agent-ops-header {{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;align-items:start;}}
-        .agent-ops-counter-row {{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}}
-        .agent-ops-counter {{min-width:108px;padding:8px 10px;border-radius:10px;background:#edf2f7;color:#1a202c;border:1px solid #e2e8f0;}}
-        .agent-ops-counter-label {{font-size:0.66rem;opacity:0.9;text-transform:uppercase;letter-spacing:0.04em;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}}
-        .agent-ops-counter-value {{font-size:0.88rem;font-weight:700;line-height:1.2;margin-top:4px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}}
-        .agent-ops-status-row {{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}}
-        .agent-ops-chip {{min-width:116px;padding:8px 10px;border-radius:10px;color:#fff;}}
-        .agent-ops-chip-label {{font-size:0.66rem;opacity:0.92;text-transform:uppercase;letter-spacing:0.04em;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}}
-        .agent-ops-chip-value {{font-size:0.8rem;font-weight:700;line-height:1.2;margin-top:4px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}}
+        .agent-ops-header {display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;align-items:start;}
+        .agent-ops-counter-row {display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}
+        .agent-ops-counter {min-width:108px;padding:8px 10px;border-radius:10px;background:#edf2f7;color:#1a202c;border:1px solid #e2e8f0;}
+        .agent-ops-counter-label {font-size:0.66rem;opacity:0.9;text-transform:uppercase;letter-spacing:0.04em;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}
+        .agent-ops-counter-value {font-size:0.88rem;font-weight:700;line-height:1.2;margin-top:4px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}
+        .agent-ops-status-row {display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}
+        .agent-ops-chip {min-width:116px;padding:8px 10px;border-radius:10px;color:#fff;}
+        .agent-ops-chip-label {font-size:0.66rem;opacity:0.92;text-transform:uppercase;letter-spacing:0.04em;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}
+        .agent-ops-chip-value {font-size:0.8rem;font-weight:700;line-height:1.2;margin-top:4px;font-family:'SFMono-Regular',Menlo,Consolas,monospace;}
         </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    header_placeholder = st.empty()
+    row_top_left, row_top_right = st.columns([1.36, 1.0])
+    with row_top_left:
+        _render_panel_section_title("Records")
+        table_rows = [
+            {
+                "RECORD": item["record_id"],
+                "AGENT": item["agent_name"],
+                "RISK": item["risk_level"],
+                "STATUS": _controlled_actions_status_label(item["status"]),
+            }
+            for item in records
+        ]
+        table_event = st.dataframe(
+            table_rows,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="agent_ops_records_table",
+        )
+        selected_rows = getattr(getattr(table_event, "selection", None), "rows", []) if table_event is not None else []
+        if selected_rows:
+            selected_row_idx = selected_rows[0]
+            st.session_state["agent_ops_selected_id"] = records[selected_row_idx]["record_id"]
+
+    current_selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
+    if selected_rows:
+        selected_row_idx = selected_rows[0]
+        new_selected_id = records[selected_row_idx]["record_id"]
+        if new_selected_id != current_selected_id:
+            st.session_state["agent_ops_selected_id"] = new_selected_id
+            current_selected_id = new_selected_id
+
+    selected = next((item for item in records if item["record_id"] == current_selected_id), records[0])
+
+    header_placeholder.markdown(
+        f"""
         <div class="agent-ops-header">
           <div class="agent-ops-counter-row">
             <div class="agent-ops-counter">
@@ -822,40 +861,6 @@ def render_controlled_actions_vertical() -> None:
         """,
         unsafe_allow_html=True,
     )
-
-    row_top_left, row_top_right = st.columns([1.36, 1.0])
-    with row_top_left:
-        _render_panel_section_title("Records")
-        table_rows = [
-            {
-                "RECORD": item["record_id"],
-                "AGENT": item["agent_name"],
-                "RISK": item["risk_level"],
-                "STATUS": _controlled_actions_status_label(item["status"]),
-            }
-            for item in records
-        ]
-        table_event = st.dataframe(
-            table_rows,
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            key="agent_ops_records_table",
-        )
-        selected_rows = getattr(getattr(table_event, "selection", None), "rows", []) if table_event is not None else []
-        if selected_rows:
-            selected_row_idx = selected_rows[0]
-            st.session_state["agent_ops_selected_id"] = records[selected_row_idx]["record_id"]
-
-    current_selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
-    selected = next((item for item in records if item["record_id"] == current_selected_id), records[0])
-    if selected_rows:
-        selected_row_idx = selected_rows[0]
-        new_selected_id = records[selected_row_idx]["record_id"]
-        if new_selected_id != current_selected_id:
-            st.session_state["agent_ops_selected_id"] = new_selected_id
-            st.rerun()
 
     with row_top_right:
         _render_panel_section_title("Proposed Operation")
