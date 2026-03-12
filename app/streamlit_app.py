@@ -2885,9 +2885,18 @@ def _render_real_estate_v2_builder() -> None:
                 or "-"
             )
 
-            st.text_input("Asset category", value=str(derived_asset_category), disabled=True, key="re_v2_user_asset_category_info", help="Auto-filled from the selected enterprise/asset.")
-            st.text_input("Portfolio segment", value=str(derived_portfolio_segment), disabled=True, key="re_v2_user_portfolio_segment_info", help="Auto-filled from the selected enterprise/asset.")
-            st.text_input("Property reference code", value=str(derived_property_reference), disabled=True, key="re_v2_user_property_ref_info", help="Auto-filled from the selected asset reference.")
+            st.dataframe(
+                [
+                    {
+                        "ASSET CATEGORY": str(derived_asset_category),
+                        "PORTFOLIO SEGMENT": str(derived_portfolio_segment),
+                        "PROPERTY REFERENCE CODE": str(derived_property_reference),
+                    }
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption("These values are auto-filled from the selected enterprise and asset.")
             if subgroup == "building_admin" and enterprise_id and not asset_id:
                 st.caption("Select an asset to bind this building administrator to a concrete property context.")
             else:
