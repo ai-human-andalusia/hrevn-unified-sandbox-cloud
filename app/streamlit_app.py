@@ -6,6 +6,7 @@ No real access, no external source systems, documentary-safe views only.
 from __future__ import annotations
 
 import json
+import pandas as pd
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -794,8 +795,10 @@ def render_controlled_actions_vertical() -> None:
     row_top_left, row_top_right = st.columns([1.36, 1.0])
     with row_top_left:
         _render_panel_section_title("Records")
+        current_selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
         table_rows = [
             {
+                "OPEN": item["record_id"] == current_selected_id,
                 "RECORD": item["record_id"],
                 "AGENT": item["agent_name"],
                 "RISK": item["risk_level"],
@@ -803,27 +806,30 @@ def render_controlled_actions_vertical() -> None:
             }
             for item in records
         ]
-        table_event = st.dataframe(
-            table_rows,
+        edited_rows = st.data_editor(
+            pd.DataFrame(table_rows),
             use_container_width=True,
             hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            key="agent_ops_records_table",
+            key="agent_ops_records_editor",
+            disabled=["RECORD", "AGENT", "RISK", "STATUS"],
+            column_config={
+                "OPEN": st.column_config.CheckboxColumn("OPEN", help="Select record", width="small"),
+                "RECORD": st.column_config.TextColumn("RECORD", width="medium"),
+                "AGENT": st.column_config.TextColumn("AGENT", width="medium"),
+                "RISK": st.column_config.TextColumn("RISK", width="small"),
+                "STATUS": st.column_config.TextColumn("STATUS", width="medium"),
+            },
         )
-        selected_rows = getattr(getattr(table_event, "selection", None), "rows", []) if table_event is not None else []
-        if selected_rows:
-            selected_row_idx = selected_rows[0]
-            st.session_state["agent_ops_selected_id"] = records[selected_row_idx]["record_id"]
+        selected_indices = [idx for idx, row in edited_rows.iterrows() if bool(row.get("OPEN"))]
+        if selected_indices:
+            chosen_idx = selected_indices[-1]
+            new_selected_id = records[int(chosen_idx)]["record_id"]
+            if new_selected_id != current_selected_id:
+                st.session_state["agent_ops_selected_id"] = new_selected_id
+                current_selected_id = new_selected_id
+                st.rerun()
 
     current_selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
-    if selected_rows:
-        selected_row_idx = selected_rows[0]
-        new_selected_id = records[selected_row_idx]["record_id"]
-        if new_selected_id != current_selected_id:
-            st.session_state["agent_ops_selected_id"] = new_selected_id
-            current_selected_id = new_selected_id
-
     selected = next((item for item in records if item["record_id"] == current_selected_id), records[0])
 
     header_placeholder.markdown(
