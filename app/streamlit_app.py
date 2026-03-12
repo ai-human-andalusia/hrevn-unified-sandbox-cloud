@@ -480,7 +480,9 @@ def _render_auth_shell() -> None:
             touch_auth_session(AUTH_ACCESS_SQLITE_PATH, active_session_id)
         if st.session_state.get("auth_role") == "admin":
             st.sidebar.markdown("### Admin space")
-            st.sidebar.button("Central Console", disabled=True, use_container_width=True)
+            if st.sidebar.button("Central Console", use_container_width=True):
+                st.session_state["main_tab_target"] = "central_console"
+                st.rerun()
             if st.sidebar.button("Access & Security", use_container_width=True):
                 st.session_state["main_tab_target"] = "access_security"
                 st.rerun()
@@ -1418,6 +1420,137 @@ def render_access_security_panel() -> None:
                     st.rerun()
 
 
+def render_central_console() -> None:
+    st.subheader("Central Console")
+    st.caption("Executive business view and technical architecture view for the unified sandbox.")
+
+    business_tab, technical_tab = st.tabs(["Business", "Technical Architecture"])
+
+    with business_tab:
+        snapshot = get_recent_auth_snapshot(AUTH_ACCESS_SQLITE_PATH, limit=100)
+        accounts = snapshot.get("accounts", [])
+        events = snapshot.get("events", [])
+        sessions = snapshot.get("sessions", [])
+        notifications = snapshot.get("notifications", [])
+        ip_controls = snapshot.get("ip_controls", [])
+
+        locked_accounts = [row for row in accounts if row.get("lockout_until_utc")]
+        suspended_accounts = [row for row in accounts if row.get("account_status") == "suspended"]
+        closed_accounts = [row for row in accounts if row.get("account_status") == "closed"]
+        blocked_ips = [row for row in ip_controls if row.get("blocked_until_utc")]
+        cooldown_ips = [row for row in ip_controls if row.get("cooldown_until_utc") and not row.get("blocked_until_utc")]
+        active_sessions = [row for row in sessions if row.get("session_state") == "active"]
+        failed_events = [row for row in events if int(row.get("success_flag") or 0) == 0]
+        critical_notifications = [
+            row for row in notifications
+            if (row.get("event_type") or "") in {
+                "user_lockout",
+                "ip_cooldown",
+                "ip_blocked",
+                "account_suspended",
+                "account_closed",
+                "sessions_revoked_by_admin",
+            }
+        ]
+
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("Accounts", len(accounts))
+        m2.metric("Active sessions", len(active_sessions))
+        m3.metric("Locked accounts", len(locked_accounts))
+        m4.metric("Suspended", len(suspended_accounts))
+        m5.metric("Blocked IPs", len(blocked_ips))
+        m6.metric("Critical alerts", len(critical_notifications))
+
+        row_left, row_right = st.columns([1.15, 0.85])
+        with row_left:
+            st.markdown("##### Current risk picture")
+            risk_rows = [
+                {"AREA": "Accounts", "STATE": "locked", "COUNT": len(locked_accounts)},
+                {"AREA": "Accounts", "STATE": "suspended", "COUNT": len(suspended_accounts)},
+                {"AREA": "Accounts", "STATE": "closed", "COUNT": len(closed_accounts)},
+                {"AREA": "IPs", "STATE": "cooldown", "COUNT": len(cooldown_ips)},
+                {"AREA": "IPs", "STATE": "blocked", "COUNT": len(blocked_ips)},
+                {"AREA": "Access", "STATE": "failed events", "COUNT": len(failed_events)},
+            ]
+            st.dataframe(risk_rows, use_container_width=True, hide_index=True)
+
+            st.markdown("##### Critical events")
+            critical_event_rows = [
+                {
+                    "WHEN": row.get("created_at_utc") or "-",
+                    "EVENT": row.get("event_type") or "-",
+                    "IDENTIFIER": row.get("identifier_attempted") or row.get("user_email") or "-",
+                    "IP": row.get("ip_public") or "-",
+                    "REASON": row.get("failure_reason") or "-",
+                }
+                for row in events
+                if (row.get("event_type") or "") in {
+                    "login_failure",
+                    "account_suspended",
+                    "account_closed",
+                    "sessions_revoked_by_admin",
+                    "ip_unblocked_by_admin",
+                }
+            ][:20]
+            if critical_event_rows:
+                st.dataframe(critical_event_rows, use_container_width=True, hide_index=True)
+            else:
+                st.info("No critical access events recorded yet.")
+
+        with row_right:
+            st.markdown("##### Most exposed entities")
+            exposed_accounts = sorted(
+                [
+                    {
+                        "USER": row.get("user_email") or "-",
+                        "STATUS": row.get("account_status") or "-",
+                        "FAILED LOGINS": row.get("failed_login_count") or 0,
+                        "LOCKOUT": row.get("lockout_until_utc") or "-",
+                    }
+                    for row in accounts
+                ],
+                key=lambda item: (int(item["FAILED LOGINS"]), item["STATUS"] != "active"),
+                reverse=True,
+            )[:10]
+            if exposed_accounts:
+                st.dataframe(exposed_accounts, use_container_width=True, hide_index=True)
+            else:
+                st.info("No account exposure data yet.")
+
+            st.markdown("##### IP pressure")
+            ip_rows = [
+                {
+                    "IP": row.get("ip_public") or "-",
+                    "FAILED LOGINS": row.get("failed_login_count") or 0,
+                    "COOLDOWN": row.get("cooldown_until_utc") or "-",
+                    "BLOCKED": row.get("blocked_until_utc") or "-",
+                }
+                for row in ip_controls
+            ][:10]
+            if ip_rows:
+                st.dataframe(ip_rows, use_container_width=True, hide_index=True)
+            else:
+                st.info("No IP control events yet.")
+
+            st.markdown("##### Delivery health")
+            delivery_rows = [
+                {
+                    "CHANNEL": row.get("delivery_channel") or "-",
+                    "EVENT": row.get("event_type") or "-",
+                    "STATUS": row.get("delivery_status") or "-",
+                    "TARGET": row.get("target_email") or "-",
+                }
+                for row in notifications[:12]
+            ]
+            if delivery_rows:
+                st.dataframe(delivery_rows, use_container_width=True, hide_index=True)
+            else:
+                st.info("No notification delivery data yet.")
+
+    with technical_tab:
+        render_dry_run_dashboard()
+
+
 def _prepare_real_estate_context(snapshot, visit_id: str) -> dict:
     visits = snapshot.visits
     assets = snapshot.assets
@@ -2351,6 +2484,17 @@ def main() -> None:
                 st.session_state.pop("main_tab_target", None)
                 st.rerun()
         render_controlled_actions_vertical()
+        return
+
+    if target == "central_console":
+        top_left, top_right = st.columns([0.86, 0.14])
+        with top_left:
+            st.subheader("Central Console")
+        with top_right:
+            if st.button("Back to all panels", use_container_width=True):
+                st.session_state.pop("main_tab_target", None)
+                st.rerun()
+        render_central_console()
         return
 
     if target == "access_security":
