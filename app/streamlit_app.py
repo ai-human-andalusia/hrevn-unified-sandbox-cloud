@@ -870,6 +870,7 @@ def render_controlled_actions_vertical() -> None:
                 {"FIELD": "Submitted at", "VALUE": selected["submitted_at_utc"]},
                 {"FIELD": "Agent", "VALUE": selected["agent_name"]},
                 {"FIELD": "Operation type", "VALUE": selected["operation_type"]},
+                {"FIELD": "Approval policy", "VALUE": selected["approval_policy"]},
                 {"FIELD": "Operation", "VALUE": selected["intent"]},
                 {"FIELD": "Tool", "VALUE": selected["tool_name"]},
                 {"FIELD": "Review reason", "VALUE": selected["review_reason"]},
