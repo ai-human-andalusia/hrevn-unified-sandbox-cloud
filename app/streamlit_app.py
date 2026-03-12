@@ -2167,16 +2167,6 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
     if asset_key not in st.session_state:
         st.session_state[asset_key] = str(selected_asset.get("asset_id") or "")
 
-    header_left, header_btn1, header_btn2 = st.columns([2, 1, 1])
-    with header_left:
-        st.markdown("#### Nueva visita")
-    if header_btn1.button("Nueva visita", key=f"{key_prefix}_new_visit", use_container_width=True):
-        st.session_state[mode_key] = "new_visit"
-        st.session_state[asset_key] = ""
-    if header_btn2.button("Nueva observación", key=f"{key_prefix}_new_observation", use_container_width=True):
-        st.session_state[mode_key] = "new_observation"
-        st.session_state[asset_key] = str(selected_asset.get("asset_id") or "")
-
     asset_options = {"Select asset": ""}
     asset_options.update(
         {
@@ -2191,6 +2181,17 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
 
     left, right = st.columns(2)
     with left:
+        action_left, action_right = st.columns(2)
+        if action_left.button("Nueva visita", key=f"{key_prefix}_new_visit", use_container_width=True):
+            st.session_state[mode_key] = "new_visit"
+            st.session_state[asset_key] = ""
+            st.rerun()
+        if action_right.button("Nueva observación", key=f"{key_prefix}_new_observation", use_container_width=True):
+            st.session_state[mode_key] = "new_observation"
+            if not st.session_state.get(asset_key):
+                st.session_state[asset_key] = str(selected_asset.get("asset_id") or "")
+            st.rerun()
+
         field_a, field_b = st.columns(2)
         with field_a:
             chosen_asset_label = st.selectbox(
@@ -2214,24 +2215,16 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
 
         if st.session_state.get(mode_key) == "new_observation":
             next_observation_number = len(observations) + 1
-            st.text_input(
-                "Número de observación",
-                value=f"OBS-{display_visit_id or 'NEW'}-{next_observation_number:03d}",
-                disabled=True,
-                key=f"{key_prefix}_observation_number",
-            )
-            selected_observation = {}
-        elif observations:
-            labels = [f"{item.get('record_uuid')} ({item.get('lpi_code') or '-'})" for item in observations]
-            selected_label = st.selectbox("Observations in visit", labels, key=f"{key_prefix}_observation")
-            record_uuid = selected_label.split(" (")[0]
-            selected_observation = next(
-                (item for item in observations if item.get("record_uuid") == record_uuid),
-                observations[0],
-            )
+            observation_display = f"OBS-{display_visit_id or 'NEW'}-{next_observation_number:03d}"
         else:
-            selected_observation = {}
-            st.info("No observations found for this visit.")
+            observation_display = ""
+        st.text_input(
+            "Número de observación",
+            value=observation_display,
+            disabled=True,
+            key=f"{key_prefix}_observation_number",
+        )
+        selected_observation = {}
 
         current_lpi = str(selected_observation.get("lpi_code") or "")
         lpi_index = lpi_options.index(current_lpi) if current_lpi in lpi_options else 0
