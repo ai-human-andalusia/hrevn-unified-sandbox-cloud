@@ -3081,16 +3081,7 @@ def render_real_estate_vertical() -> None:
     admin_tab, user_tab, enterprise_tab = st.tabs(["Admin", "User", "Enterprise"])
 
     with admin_tab:
-        tab_overview, tab_v2 = st.tabs(
-            [
-                "Overview",
-                "V2 Builder",
-            ]
-        )
-        with tab_overview:
-            _render_real_estate_overview(snapshot, context, readiness)
-        with tab_v2:
-            _render_real_estate_v2_builder()
+        _render_real_estate_v2_builder()
 
     with user_tab:
         _render_real_estate_user_avatar(context, workspace, readiness)
