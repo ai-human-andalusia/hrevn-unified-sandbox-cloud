@@ -1030,140 +1030,46 @@ def render_mapping_validator() -> None:
 
 def render_dry_run_dashboard() -> None:
     st.subheader("Dry-Run Convergence Dashboard")
-    st.caption("Static documentary/project signals only. No execution against real systems.")
+    st.caption("High-level structural view of what is already built inside the sandbox. This is not an operational dashboard and it does not show live business data.")
 
     rows = []
     for name, path in _directory_snapshot():
         stats = _stats_for(path)
         rows.append(
             {
-                "area": name,
-                "files": stats["files"],
-                "md": stats["md"],
-                "yaml_yml": stats["yaml_yml"],
-                "json": stats["json"],
-                "py": stats["py"],
+                "Area": name,
+                "Total files": stats["files"],
+                "Docs (.md)": stats["md"],
+                "Mappings (.yaml/.yml)": stats["yaml_yml"],
+                "Data contracts (.json)": stats["json"],
+                "Utilities (.py)": stats["py"],
             }
         )
 
-    st.dataframe(rows, use_container_width=True)
-
-    st.markdown("### Sandbox Safety State")
+    st.markdown("### What this table means")
     st.write(
-        {
-            "real_access_enabled": False,
-            "sqlite_connections": False,
-            "real_data_reads": False,
-            "mode": "documentation_only",
-        }
+        "This table is a structural inventory of the sandbox. It tells us how much documentary, mapping and utility material exists in each internal area. It does not represent certificates issued, visits completed or any live operational KPI."
     )
 
-    st.markdown("### Unified Common Layer (Local-Only)")
-    cfg = load_common_config()
-    posture = evaluate_secret_posture(cfg)
-    provider = choose_ai_provider(cfg)
-    mail = get_mail_connector_status(cfg)
-    gh = get_github_connector_status(cfg)
-    tg = get_telegram_connector_status(cfg)
+    st.dataframe(rows, use_container_width=True, hide_index=True)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.write("Redacted connector config")
-        st.json(redact_config_for_ui(cfg))
-    with c2:
-        st.write("Operational selection")
-        st.json(
-            {
-                "ai_provider_selected": provider.selected,
-                "ai_provider_reason": provider.reason,
-                "mail_preferred_channel": mail.preferred_channel,
-                "github_ready_for_push_ops": gh.ready_for_push_ops,
-                "telegram_ready": tg.ready,
-            }
-        )
-
-    st.write("Secret posture checks")
-    st.json(
-        {
-            "openai_ok": posture.openai_ok,
-            "gemini_ok": posture.gemini_ok,
-            "gmail_oauth_ok": posture.gmail_oauth_ok,
-            "smtp_ok": posture.smtp_ok,
-            "github_ok": posture.github_ok,
-            "telegram_ok": posture.telegram_ok,
-        }
+    st.markdown("### How to read it")
+    st.dataframe(
+        [
+            {"Column": "Area", "Meaning": "Functional zone inside the sandbox such as docs, samples, schema or importers."},
+            {"Column": "Total files", "Meaning": "How many files exist in that area overall."},
+            {"Column": "Docs (.md)", "Meaning": "Narrative or architectural documentation files."},
+            {"Column": "Mappings (.yaml/.yml)", "Meaning": "Mapping or interface definition files used for convergence work."},
+            {"Column": "Data contracts (.json)", "Meaning": "JSON schemas, examples or contract artifacts stored in that area."},
+            {"Column": "Utilities (.py)", "Meaning": "Python helpers, importers or support scripts present in that area."},
+        ],
+        use_container_width=True,
+        hide_index=True,
     )
 
-    st.write("Connector readiness")
-    st.json(
-        {
-            "gmail_oauth_ready": mail.gmail_oauth_ready,
-            "smtp_ready": mail.smtp_ready,
-            "outbound_ready": mail.outbound_ready,
-            "recovery_ready": mail.recovery_ready,
-            "inbound_sync_ready": mail.inbound_sync_ready,
-            "github_repo_ref_set": gh.repo_ref_set,
-            "github_token_set": gh.token_set,
-            "github_branch": gh.branch,
-            "telegram_enabled": tg.enabled,
-            "telegram_bot_token_set": tg.bot_token_set,
-            "telegram_chat_id_set": tg.chat_id_set,
-            "telegram_ready": tg.ready,
-        }
+    st.info(
+        "If a row looks sparse or empty, it usually means that area is not being used heavily yet or that its material lives in another family of documents."
     )
-
-    st.write("Platform operations readiness")
-    st.json(
-        {
-            "mail_from_configured": bool(cfg.mail_from),
-            "notify_email_configured": bool(cfg.notify_email),
-            "gmail_sync_query": cfg.gmail_sync_query,
-            "blockchain_enabled": cfg.blockchain_enabled,
-            "blockchain_network": cfg.blockchain_network,
-            "blockchain_target": cfg.blockchain_target,
-        }
-    )
-
-    st.markdown("### Telegram Controlled Test")
-    st.caption("One explicit send per click. Use only for controlled validation.")
-    test_message = st.text_input(
-        "Test message",
-        value="[HREVN CLOUD] Controlled Telegram test",
-        key="telegram_test_message",
-    )
-    confirm_send = st.checkbox(
-        "I confirm sending one controlled Telegram test message now.",
-        key="telegram_test_confirm",
-    )
-    if st.button("Send Telegram Controlled Test", key="telegram_test_send"):
-        if not confirm_send:
-            st.warning("Please confirm before sending the test message.")
-        elif not tg.ready:
-            st.error("Telegram is not ready. Check secrets and connector status first.")
-        else:
-            ok, detail = send_controlled_test_message(test_message)
-            if ok:
-                st.success(f"Telegram test sent successfully ({detail}).")
-            else:
-                st.error(f"Telegram test failed ({detail}).")
-
-    findings = run_secret_hygiene_scan(ROOT)
-    st.write(f"Secret hygiene scan findings (max 25): {len(findings)}")
-    if findings:
-        st.dataframe(
-            [
-                {
-                    "file_path": f.file_path,
-                    "line_number": f.line_number,
-                    "category": f.category,
-                    "snippet": f.snippet,
-                }
-                for f in findings
-            ],
-            use_container_width=True,
-        )
-    else:
-        st.success("No obvious hardcoded secret patterns detected in scanned files.")
 
 
 def main() -> None:
