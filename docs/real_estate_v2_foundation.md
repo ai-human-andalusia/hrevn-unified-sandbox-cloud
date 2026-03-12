@@ -19,6 +19,7 @@ Tables:
 - re_accounts
 - re_enterprises
 - re_assets
+- re_units
 - re_visits
 - re_observations
 - re_photos
@@ -38,3 +39,12 @@ Subtype-specific fields stay in JSON.
 - the protocol must declare in output how many items entered as direct capture and how many entered as manual upload
 - the protocol must declare the direct capture window duration in the final output
 - login inactivity timeout remains separate from capture timeout and is set to 15 minutes
+
+
+## Unit-level extensibility
+
+- a single asset can contain many rental or managed units
+- unit-level work should not require a new vertical or a separate database
+- `re_units` stores the optional unit layer below `re_assets`
+- account-to-asset assignments can optionally narrow to a specific `unit_id`
+- visits can optionally target a specific `unit_id` when the work is not for the whole asset

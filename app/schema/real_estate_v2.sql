@@ -46,22 +46,38 @@ CREATE TABLE IF NOT EXISTS re_assets (
   FOREIGN KEY (enterprise_id) REFERENCES re_enterprises(enterprise_id)
 );
 
+CREATE TABLE IF NOT EXISTS re_units (
+  unit_id TEXT PRIMARY KEY,
+  asset_id TEXT NOT NULL,
+  unit_public_id TEXT NOT NULL UNIQUE,
+  unit_label TEXT NOT NULL,
+  unit_type TEXT NOT NULL DEFAULT 'rental_unit',
+  unit_status TEXT NOT NULL DEFAULT 'active',
+  unit_data_json TEXT NOT NULL DEFAULT '{}',
+  created_at_utc TEXT NOT NULL,
+  updated_at_utc TEXT NOT NULL,
+  FOREIGN KEY (asset_id) REFERENCES re_assets(asset_id)
+);
+
 CREATE TABLE IF NOT EXISTS re_account_asset_links (
   link_id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL,
   asset_id TEXT NOT NULL,
+  unit_id TEXT,
   assignment_role TEXT NOT NULL DEFAULT 'assigned_operator',
   link_data_json TEXT NOT NULL DEFAULT '{}',
   created_at_utc TEXT NOT NULL,
   updated_at_utc TEXT NOT NULL,
   FOREIGN KEY (account_id) REFERENCES re_accounts(account_id),
   FOREIGN KEY (asset_id) REFERENCES re_assets(asset_id),
-  UNIQUE(account_id, asset_id)
+  FOREIGN KEY (unit_id) REFERENCES re_units(unit_id),
+  UNIQUE(account_id, asset_id, unit_id)
 );
 
 CREATE TABLE IF NOT EXISTS re_visits (
   visit_id TEXT PRIMARY KEY,
   asset_id TEXT NOT NULL,
+  unit_id TEXT,
   created_by_account_id TEXT,
   visit_date_utc TEXT,
   visit_status TEXT NOT NULL DEFAULT 'work',
@@ -78,6 +94,7 @@ CREATE TABLE IF NOT EXISTS re_visits (
   created_at_utc TEXT NOT NULL,
   updated_at_utc TEXT NOT NULL,
   FOREIGN KEY (asset_id) REFERENCES re_assets(asset_id),
+  FOREIGN KEY (unit_id) REFERENCES re_units(unit_id),
   FOREIGN KEY (created_by_account_id) REFERENCES re_accounts(account_id)
 );
 
@@ -165,9 +182,12 @@ CREATE TABLE IF NOT EXISTS re_deliveries (
 
 CREATE INDEX IF NOT EXISTS idx_re_accounts_subgroup ON re_accounts(subgroup);
 CREATE INDEX IF NOT EXISTS idx_re_assets_enterprise ON re_assets(enterprise_id);
+CREATE INDEX IF NOT EXISTS idx_re_units_asset ON re_units(asset_id);
 CREATE INDEX IF NOT EXISTS idx_re_account_asset_links_account ON re_account_asset_links(account_id);
 CREATE INDEX IF NOT EXISTS idx_re_account_asset_links_asset ON re_account_asset_links(asset_id);
+CREATE INDEX IF NOT EXISTS idx_re_account_asset_links_unit ON re_account_asset_links(unit_id);
 CREATE INDEX IF NOT EXISTS idx_re_visits_asset ON re_visits(asset_id);
+CREATE INDEX IF NOT EXISTS idx_re_visits_unit ON re_visits(unit_id);
 CREATE INDEX IF NOT EXISTS idx_re_observations_visit ON re_observations(visit_id);
 CREATE INDEX IF NOT EXISTS idx_re_photos_visit ON re_photos(visit_id);
 CREATE INDEX IF NOT EXISTS idx_re_attachments_visit ON re_attachments(visit_id);

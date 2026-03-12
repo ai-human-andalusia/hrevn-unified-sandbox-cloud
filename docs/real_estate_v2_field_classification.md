@@ -81,13 +81,35 @@ Common use:
 - identify the property or managed asset
 - provide location and status
 
-## 4. Common visit fields
+## 4. Common unit fields
+
+Table: `re_units`
+
+Fixed columns:
+- `unit_id`
+- `asset_id`
+- `unit_public_id`
+- `unit_label`
+- `unit_type`
+- `unit_status`
+- `created_at_utc`
+- `updated_at_utc`
+
+JSON extension:
+- `unit_data_json`
+
+Common use:
+- represent apartments, offices, rental units or managed sub-assets inside one asset
+- allow assignments and visits at unit level without breaking the asset model
+
+## 5. Common visit fields
 
 Table: `re_visits`
 
 Fixed columns:
 - `visit_id`
 - `asset_id`
+- `unit_id`
 - `created_by_account_id`
 - `visit_date_utc`
 - `visit_status`
@@ -111,7 +133,7 @@ Common use:
 - review/issuance/delivery tracking
 - capture window and closure state
 
-## 5. Common observation fields
+## 6. Common observation fields
 
 Table: `re_observations`
 
@@ -135,7 +157,7 @@ Common use:
 - structured issue severity
 - review blocking or approval
 
-## 6. Common direct-capture photo fields
+## 7. Common direct-capture photo fields
 
 Table: `re_photos`
 
@@ -162,7 +184,7 @@ Common use:
 - linking each photo to visit/asset/observation
 - distinguish `direct_capture` from `manual_upload`
 
-## 7. Common manual attachment fields
+## 8. Common manual attachment fields
 
 Table: `re_attachments`
 
@@ -187,7 +209,7 @@ Common use:
 - PDF, DOC, image or other file types
 - attachment traceability before closure
 
-## 8. Common issuance fields
+## 9. Common issuance fields
 
 Table: `re_issuances`
 
@@ -209,7 +231,7 @@ Common use:
 - integrity hashes
 - output summary for direct vs manual evidence
 
-## 9. Common delivery fields
+## 10. Common delivery fields
 
 Table: `re_deliveries`
 
@@ -230,7 +252,7 @@ Common use:
 - verification count
 - ZIP download count
 
-## 10. `building_admin` specific fields
+## 11. `building_admin` specific fields
 
 Recommended storage:
 - mostly in `asset_data_json`
@@ -252,7 +274,7 @@ Typical fields:
 When to promote to fixed columns:
 - only if queried constantly across most records
 
-## 11. `property_manager` specific fields
+## 12. `property_manager` specific fields
 
 Recommended storage:
 - mostly in `asset_data_json`
