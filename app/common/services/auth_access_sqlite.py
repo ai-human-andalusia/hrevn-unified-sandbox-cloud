@@ -73,6 +73,7 @@ def ensure_auth_access_db(db_path: Path) -> None:
               user_role TEXT NOT NULL,
               account_status TEXT NOT NULL DEFAULT 'active',
               account_source TEXT,
+              preferred_language TEXT NOT NULL DEFAULT 'en',
               created_at_utc TEXT NOT NULL,
               updated_at_utc TEXT NOT NULL,
               suspended_at_utc TEXT,
@@ -180,6 +181,9 @@ def ensure_auth_access_db(db_path: Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_auth_ip_controls_blocked ON auth_ip_controls(blocked_until_utc);
             '''
         )
+        cols = {row['name'] for row in conn.execute("PRAGMA table_info(auth_accounts)").fetchall()}
+        if 'preferred_language' not in cols:
+            conn.execute("ALTER TABLE auth_accounts ADD COLUMN preferred_language TEXT NOT NULL DEFAULT 'en'")
 
 
 def upsert_auth_account(
@@ -189,6 +193,7 @@ def upsert_auth_account(
     user_role: str,
     account_source: str,
     initial_status: str = "active",
+    preferred_language: str | None = None,
 ) -> None:
     ensure_auth_access_db(db_path)
     now = _utc_now()
@@ -200,14 +205,15 @@ def upsert_auth_account(
         conn.execute(
             '''
             INSERT INTO auth_accounts(
-              user_email, user_role, account_status, account_source, created_at_utc, updated_at_utc
-            ) VALUES (?, ?, ?, ?, ?, ?)
+              user_email, user_role, account_status, account_source, preferred_language, created_at_utc, updated_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_email) DO UPDATE SET
               user_role=excluded.user_role,
               account_source=excluded.account_source,
+              preferred_language=COALESCE(excluded.preferred_language, auth_accounts.preferred_language),
               updated_at_utc=excluded.updated_at_utc
             ''',
-            (user_email, user_role, initial_status, account_source, now, now),
+            (user_email, user_role, initial_status, account_source, (preferred_language or 'en').strip().lower(), now, now),
         )
         if existing is None:
             conn.execute(
@@ -228,6 +234,7 @@ def create_local_account(
     user_email: str,
     password: str,
     recovery_email: str | None,
+    preferred_language: str = 'en',
     context: AuthRequestContext,
 ) -> str:
     ensure_auth_access_db(db_path)
@@ -238,6 +245,7 @@ def create_local_account(
         user_role="operator",
         account_source="self_signup",
         initial_status="pending_verification",
+        preferred_language=preferred_language,
     )
     password_hash_b64, password_salt_b64 = _password_material(password)
     now = _utc_now()
@@ -291,7 +299,7 @@ def authenticate_local_account(db_path: Path, *, user_email: str, password: str)
     with _connect(db_path) as conn:
         row = conn.execute(
             '''
-            SELECT a.user_email, a.user_role, a.account_status, c.password_hash_b64, c.password_salt_b64, c.email_verified_flag
+            SELECT a.user_email, a.user_role, a.account_status, a.preferred_language, c.password_hash_b64, c.password_salt_b64, c.email_verified_flag
             FROM auth_accounts a
             JOIN auth_local_credentials c ON lower(a.user_email)=lower(c.user_email)
             WHERE lower(a.user_email)=lower(?)
@@ -934,7 +942,7 @@ def get_recent_auth_snapshot(db_path: Path, limit: int = 20) -> dict[str, list[d
     ensure_auth_access_db(db_path)
     with _connect(db_path) as conn:
         accounts = [dict(r) for r in conn.execute(
-            "SELECT user_email, user_role, account_status, account_source, created_at_utc, updated_at_utc, suspended_at_utc, closed_at_utc FROM auth_accounts ORDER BY lower(user_email)",
+            "SELECT user_email, user_role, account_status, account_source, preferred_language, created_at_utc, updated_at_utc, suspended_at_utc, closed_at_utc FROM auth_accounts ORDER BY lower(user_email)",
         )]
         events = [dict(r) for r in conn.execute(
             "SELECT user_email, user_role, identifier_attempted, event_type, success_flag, failure_reason, ip_public, user_agent, request_origin, created_at_utc FROM auth_login_events ORDER BY id DESC LIMIT ?",

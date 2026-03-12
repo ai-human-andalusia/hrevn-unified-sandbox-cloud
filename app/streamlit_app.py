@@ -328,6 +328,7 @@ def _sync_auth_accounts(cfg: AuthShellConfig) -> None:
             user_email=cfg.admin_email.strip().lower(),
             user_role="admin",
             account_source="streamlit_secrets",
+            preferred_language=_secret_value("SANDBOX_DEFAULT_LANGUAGE", "en"),
         )
     if cfg.user_email:
         upsert_auth_account(
@@ -335,12 +336,14 @@ def _sync_auth_accounts(cfg: AuthShellConfig) -> None:
             user_email=cfg.user_email.strip().lower(),
             user_role="operator",
             account_source="streamlit_secrets",
+            preferred_language=_secret_value("SANDBOX_DEFAULT_LANGUAGE", "en"),
         )
     upsert_auth_account(
         AUTH_ACCESS_SQLITE_PATH,
         user_email="demo@hrevn.local",
         user_role="demo",
         account_source="built_in_demo",
+        preferred_language=_secret_value("SANDBOX_DEFAULT_LANGUAGE", "en"),
     )
 
 
@@ -446,6 +449,7 @@ def _init_auth_state() -> None:
     st.session_state.setdefault("auth_role", "guest")
     st.session_state.setdefault("auth_email", "")
     st.session_state.setdefault("auth_session_id", "")
+    st.session_state.setdefault("auth_language", _secret_value("SANDBOX_DEFAULT_LANGUAGE", "en") or "en")
     st.session_state.setdefault("recovery_requests", [])
 
 
@@ -562,6 +566,7 @@ def _logout() -> None:
     st.session_state["auth_role"] = "guest"
     st.session_state["auth_email"] = ""
     st.session_state["auth_session_id"] = ""
+    st.session_state["auth_language"] = _secret_value("SANDBOX_DEFAULT_LANGUAGE", "en") or "en"
 
 
 def _render_auth_shell() -> None:
@@ -714,10 +719,12 @@ def _render_auth_shell() -> None:
                             failure_reason=None,
                             context=context,
                         )
+                        selected_language = str((account_record or {}).get("preferred_language") or _secret_value("SANDBOX_DEFAULT_LANGUAGE", "en") or "en").lower()
                         st.session_state["auth_logged_in"] = True
                         st.session_state["auth_role"] = matched[0]
                         st.session_state["auth_email"] = matched[1]
                         st.session_state["auth_session_id"] = session_id
+                        st.session_state["auth_language"] = selected_language
                         st.success("Access granted.")
                         st.rerun()
                 elif cfg.auth_enabled and cfg.has_configured_accounts:
@@ -820,6 +827,7 @@ def _render_auth_shell() -> None:
                         st.session_state["auth_role"] = "demo"
                         st.session_state["auth_email"] = "demo@hrevn.local"
                         st.session_state["auth_session_id"] = session_id
+                        st.session_state["auth_language"] = _secret_value("SANDBOX_DEFAULT_LANGUAGE", "en") or "en"
                         st.rerun()
         with right:
             st.markdown("#### Access status")
@@ -853,6 +861,12 @@ def _render_auth_shell() -> None:
         with signup_left:
             register_email = st.text_input("Email", key="register_email")
             register_recovery = st.text_input("Recovery email (optional)", key="register_recovery_email")
+            register_language = st.selectbox(
+                "Preferred language",
+                options=["en", "es"],
+                format_func=lambda value: {"en": "English", "es": "Español"}.get(value, value),
+                key="register_preferred_language",
+            )
             register_password = st.text_input("Password", type="password", key="register_password")
             register_password_2 = st.text_input("Confirm password", type="password", key="register_password_confirm")
             if st.button("Create account", type="primary"):
@@ -873,6 +887,7 @@ def _render_auth_shell() -> None:
                             user_email=email_value,
                             password=register_password,
                             recovery_email=recovery_value or None,
+                            preferred_language=register_language,
                             context=context,
                         )
                         log_auth_event(
@@ -917,6 +932,7 @@ def _render_auth_shell() -> None:
                     {"Rule": "Email", "Requirement": "valid and unique"},
                     {"Rule": "Password", "Requirement": "10+ chars, mixed case, one number"},
                     {"Rule": "Verification", "Requirement": "email token required before login"},
+                    {"Rule": "Language", "Requirement": "preferred language is saved to the account profile"},
                     {"Rule": "Audit trail", "Requirement": "signup, verification, IP and session events are recorded"},
                 ],
                 use_container_width=True,
