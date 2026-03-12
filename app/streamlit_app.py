@@ -791,7 +791,6 @@ def render_controlled_actions_vertical() -> None:
         unsafe_allow_html=True,
     )
 
-    header_placeholder = st.empty()
     row_top_left, row_top_right = st.columns([1.36, 1.0])
     with row_top_left:
         _render_panel_section_title("Records")
@@ -832,7 +831,7 @@ def render_controlled_actions_vertical() -> None:
     current_selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
     selected = next((item for item in records if item["record_id"] == current_selected_id), records[0])
 
-    header_placeholder.markdown(
+    st.markdown(
         f"""
         <div class="agent-ops-header">
           <div class="agent-ops-counter-row">
