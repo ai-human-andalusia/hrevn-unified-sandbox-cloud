@@ -2869,11 +2869,44 @@ def _render_real_estate_v2_builder() -> None:
             else:
                 st.dataframe([], use_container_width=True, hide_index=True)
         with t_accounts:
-            _render_panel_section_title("Recent accounts")
-            st.dataframe(list_re_v2_accounts(), use_container_width=True, hide_index=True)
+            account_rows = list_re_v2_accounts()
+            account_query = st.text_input(
+                "Search accounts",
+                key="re_v2_recent_accounts_search",
+                label_visibility="collapsed",
+                placeholder="Search by email, subgroup, enterprise or account id",
+            ).strip().lower()
+            if account_query:
+                filtered_account_rows = [
+                    row for row in account_rows
+                    if account_query in str(row.get("user_email", "")).lower()
+                    or account_query in str(row.get("subgroup", "")).lower()
+                    or account_query in str(row.get("enterprise_id", "")).lower()
+                    or account_query in str(row.get("account_id", "")).lower()
+                ]
+            else:
+                filtered_account_rows = account_rows
+            st.dataframe(filtered_account_rows, use_container_width=True, hide_index=True)
         with t_assets:
-            _render_panel_section_title("Recent assets")
-            st.dataframe(list_re_v2_assets(), use_container_width=True, hide_index=True)
+            asset_rows = list_re_v2_assets()
+            asset_query = st.text_input(
+                "Search assets",
+                key="re_v2_recent_assets_search",
+                label_visibility="collapsed",
+                placeholder="Search by asset name, public id, city or enterprise",
+            ).strip().lower()
+            if asset_query:
+                filtered_asset_rows = [
+                    row for row in asset_rows
+                    if asset_query in str(row.get("asset_name", "")).lower()
+                    or asset_query in str(row.get("asset_public_id", "")).lower()
+                    or asset_query in str(row.get("city", "")).lower()
+                    or asset_query in str(row.get("enterprise_id", "")).lower()
+                    or asset_query in str(row.get("asset_id", "")).lower()
+                ]
+            else:
+                filtered_asset_rows = asset_rows
+            st.dataframe(filtered_asset_rows, use_container_width=True, hide_index=True)
         with t_links:
             _render_panel_section_title("User to asset assignments")
             st.dataframe(list_re_v2_account_asset_links(), use_container_width=True, hide_index=True)
