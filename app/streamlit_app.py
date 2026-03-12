@@ -791,10 +791,11 @@ def render_controlled_actions_vertical() -> None:
         unsafe_allow_html=True,
     )
 
+    current_selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
+    header_container = st.container()
     row_top_left, row_top_right = st.columns([1.36, 1.0])
     with row_top_left:
         _render_panel_section_title("Records")
-        current_selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
         table_rows = [
             {
                 "OPEN": item["record_id"] == current_selected_id,
@@ -809,7 +810,7 @@ def render_controlled_actions_vertical() -> None:
             pd.DataFrame(table_rows),
             use_container_width=True,
             hide_index=True,
-            key="agent_ops_records_editor",
+            key=f"agent_ops_records_editor_{current_selected_id}",
             disabled=["RECORD", "AGENT", "RISK", "STATUS"],
             column_config={
                 "OPEN": st.column_config.CheckboxColumn("OPEN", help="Select record", width="small"),
@@ -825,47 +826,47 @@ def render_controlled_actions_vertical() -> None:
             new_selected_id = records[int(chosen_idx)]["record_id"]
             if new_selected_id != current_selected_id or len(selected_indices) > 1:
                 st.session_state["agent_ops_selected_id"] = new_selected_id
-                current_selected_id = new_selected_id
                 st.rerun()
 
     current_selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
     selected = next((item for item in records if item["record_id"] == current_selected_id), records[0])
 
-    st.markdown(
-        f"""
-        <div class="agent-ops-header">
-          <div class="agent-ops-counter-row">
-            <div class="agent-ops-counter">
-              <div class="agent-ops-counter-label">Pending Review</div>
-              <div class="agent-ops-counter-value">{pending_count}</div>
+    with header_container:
+        st.markdown(
+            f"""
+            <div class="agent-ops-header">
+              <div class="agent-ops-counter-row">
+                <div class="agent-ops-counter">
+                  <div class="agent-ops-counter-label">Pending Review</div>
+                  <div class="agent-ops-counter-value">{pending_count}</div>
+                </div>
+                <div class="agent-ops-counter">
+                  <div class="agent-ops-counter-label">Accepted</div>
+                  <div class="agent-ops-counter-value">{accepted_count}</div>
+                </div>
+                <div class="agent-ops-counter">
+                  <div class="agent-ops-counter-label">Rejected</div>
+                  <div class="agent-ops-counter-value">{rejected_count}</div>
+                </div>
+              </div>
+              <div class="agent-ops-status-row">
+                <div class="agent-ops-chip" style="background:{risk_color(selected['risk_level'])}">
+                  <div class="agent-ops-chip-label">Risk Level</div>
+                  <div class="agent-ops-chip-value">{selected['risk_level']}</div>
+                </div>
+                <div class="agent-ops-chip" style="background:{policy_color(selected['approval_policy'])}">
+                  <div class="agent-ops-chip-label">Approval Policy</div>
+                  <div class="agent-ops-chip-value">{selected['approval_policy']}</div>
+                </div>
+                <div class="agent-ops-chip" style="background:{status_color(selected['status'])}">
+                  <div class="agent-ops-chip-label">Status</div>
+                  <div class="agent-ops-chip-value">{_controlled_actions_status_label(selected['status'])}</div>
+                </div>
+              </div>
             </div>
-            <div class="agent-ops-counter">
-              <div class="agent-ops-counter-label">Accepted</div>
-              <div class="agent-ops-counter-value">{accepted_count}</div>
-            </div>
-            <div class="agent-ops-counter">
-              <div class="agent-ops-counter-label">Rejected</div>
-              <div class="agent-ops-counter-value">{rejected_count}</div>
-            </div>
-          </div>
-          <div class="agent-ops-status-row">
-            <div class="agent-ops-chip" style="background:{risk_color(selected['risk_level'])}">
-              <div class="agent-ops-chip-label">Risk Level</div>
-              <div class="agent-ops-chip-value">{selected['risk_level']}</div>
-            </div>
-            <div class="agent-ops-chip" style="background:{policy_color(selected['approval_policy'])}">
-              <div class="agent-ops-chip-label">Approval Policy</div>
-              <div class="agent-ops-chip-value">{selected['approval_policy']}</div>
-            </div>
-            <div class="agent-ops-chip" style="background:{status_color(selected['status'])}">
-              <div class="agent-ops-chip-label">Status</div>
-              <div class="agent-ops-chip-value">{_controlled_actions_status_label(selected['status'])}</div>
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            """,
+            unsafe_allow_html=True,
+        )
 
     with row_top_right:
         _render_panel_section_title("Proposed Operation")
