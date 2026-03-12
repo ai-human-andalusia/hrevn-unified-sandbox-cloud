@@ -118,6 +118,7 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
     aer_id = f"AER-{record['record_id']}"
     normalized = _normalize_state(record)
     full_seal_reference = _full_seal_reference(record, normalized, packaged_at_utc)
+    package_delivery_id = f"{record['record_id']}_{packaged_at_utc.replace(':', '').replace('-', '').replace('T', '_').replace('Z', '')}"
 
     operation_record = {
         "aer_id": aer_id,
@@ -275,23 +276,30 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
             zf.writestr(name, content)
     zip_bytes = zip_buffer.getvalue()
     zip_sha256 = _sha256_bytes(zip_bytes)
+    zip_filename = f"{package_delivery_id}_{root_hash}.zip"
+    delivery_seal_filename = f"{package_delivery_id}_{root_hash}.zip.sha256.txt"
     delivery_seal_text = (
         f"PACKAGE FAMILY = H-REVN AER\n"
         f"BUNDLE PROFILE = agent_operation_aer_v1\n"
-        f"DELIVERY ARTIFACT = {record['record_id']}_{root_hash}.zip\n"
+        f"PACKAGE DELIVERY ID = {package_delivery_id}\n"
+        f"AER ID = {aer_id}\n"
+        f"RECORD ID = {record['record_id']}\n"
+        f"DELIVERY ARTIFACT = {zip_filename}\n"
         f"DELIVERY SHA256 = {zip_sha256}\n"
         f"DELIVERY SEAL STATUS = detached_container_hash\n"
+        f"MATCH RULE = this sidecar is valid only for the exact DELIVERY ARTIFACT named above\n"
     ).encode("utf-8")
 
     return {
         "aer_id": aer_id,
+        "package_delivery_id": package_delivery_id,
         "manifest_hash": _sha256_bytes(manifest_bytes),
         "root_hash": root_hash,
         "zip_sha256": zip_sha256,
         "artifacts": [{"artifact": name, "sha256": sha, "size_bytes": len(artifacts[name])} for name, sha in sorted(checksum_rows, key=lambda item: item[0])],
-        "zip_filename": f"{record['record_id']}_{root_hash}.zip",
+        "zip_filename": zip_filename,
         "zip_bytes": zip_bytes,
-        "delivery_seal_filename": f"{record['record_id']}_{root_hash}.zip.sha256.txt",
+        "delivery_seal_filename": delivery_seal_filename,
         "delivery_seal_bytes": delivery_seal_text,
         "report_filename": "agent_operation_review_report.pdf",
     }

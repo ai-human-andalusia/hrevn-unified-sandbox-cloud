@@ -941,6 +941,7 @@ def render_controlled_actions_vertical() -> None:
             st.dataframe(
                 [
                     {"FIELD": "AER ID", "VALUE": package_payload["aer_id"]},
+                    {"FIELD": "Delivery ID", "VALUE": package_payload["package_delivery_id"]},
                     {"FIELD": "Seal reference", "VALUE": selected["seal_reference"] or "-"},
                     {"FIELD": "Manifest hash", "VALUE": package_payload["manifest_hash"][:20] + "..."},
                     {"FIELD": "Root hash", "VALUE": package_payload["root_hash"][:20] + "..."},
@@ -1001,6 +1002,7 @@ def render_controlled_actions_vertical() -> None:
                 mime="text/plain",
                 use_container_width=True,
             )
+            st.caption("Download the ZIP package and the delivery seal together as a matched pair. The sidecar is valid only for the exact ZIP filename it names.")
 
     with lower_right:
         _render_panel_section_title("Decision Rationale")
