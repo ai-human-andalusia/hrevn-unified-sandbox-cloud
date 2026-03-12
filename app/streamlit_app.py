@@ -1027,6 +1027,37 @@ def render_access_security_panel() -> None:
                     use_container_width=True,
                     hide_index=True,
                 )
+                related_events = [
+                    row for row in events
+                    if ((row.get("user_email") or "").lower() == selected_account.lower())
+                    or ((row.get("identifier_attempted") or "").lower() == selected_account.lower())
+                ]
+                related_lifecycle = [
+                    row for row in lifecycle
+                    if (row.get("user_email") or "").lower() == selected_account.lower()
+                ]
+                related_notifications = [
+                    row for row in notifications
+                    if ((row.get("related_user_email") or "").lower() == selected_account.lower())
+                    or ((row.get("target_email") or "").lower() == selected_account.lower())
+                ]
+                related_ips = sorted(
+                    {
+                        row.get("ip_public") or "-"
+                        for row in related_events
+                        if row.get("ip_public")
+                    }
+                )
+                st.dataframe(
+                    [{
+                        "RELATED EVENTS": len(related_events),
+                        "LIFECYCLE EVENTS": len(related_lifecycle),
+                        "NOTIFICATIONS": len(related_notifications),
+                        "KNOWN IPS": len([item for item in related_ips if item != "-"]),
+                    }],
+                    use_container_width=True,
+                    hide_index=True,
+                )
             with right:
                 st.markdown("##### Decision rationale")
                 action_reason = st.text_area(
@@ -1181,6 +1212,74 @@ def render_access_security_panel() -> None:
                     st.info("Self-management remains blocked for suspend and close.")
                 elif current_status != "active" and not (action_reason or "").strip():
                     st.caption("A reason is required before closing an account.")
+            st.markdown("##### Security history")
+            history_tab_a, history_tab_b, history_tab_c, history_tab_d = st.tabs(["Access", "Sessions", "Lifecycle", "Notifications"])
+            with history_tab_a:
+                if related_events:
+                    history_rows = [
+                        {
+                            "WHEN": row.get("created_at_utc") or "-",
+                            "EVENT": row.get("event_type") or "-",
+                            "RESULT": "success" if int(row.get("success_flag") or 0) else "failure",
+                            "IP": row.get("ip_public") or "-",
+                            "REASON": row.get("failure_reason") or "-",
+                        }
+                        for row in related_events
+                    ]
+                    st.dataframe(history_rows, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No access history for this account yet.")
+            with history_tab_b:
+                if impacted_sessions or any((row.get("user_email") or "").lower() == selected_account.lower() for row in sessions):
+                    session_history_rows = [
+                        {
+                            "SESSION": row.get("session_id") or "-",
+                            "STATE": row.get("session_state") or "-",
+                            "IP": row.get("ip_public") or "-",
+                            "CREATED": row.get("created_at_utc") or "-",
+                            "LAST SEEN": row.get("last_seen_at_utc") or "-",
+                            "REVOKED": row.get("revoked_at_utc") or "-",
+                        }
+                        for row in sessions
+                        if (row.get("user_email") or "").lower() == selected_account.lower()
+                    ]
+                    st.dataframe(session_history_rows, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No session history for this account yet.")
+            with history_tab_c:
+                if related_lifecycle:
+                    lifecycle_rows = [
+                        {
+                            "WHEN": row.get("created_at_utc") or "-",
+                            "EVENT": row.get("event_type") or "-",
+                            "FROM": row.get("previous_status") or "-",
+                            "TO": row.get("resulting_status") or "-",
+                            "BY": row.get("performed_by_user_email") or "-",
+                            "REASON": row.get("reason") or "-",
+                        }
+                        for row in related_lifecycle
+                    ]
+                    st.dataframe(lifecycle_rows, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No lifecycle history for this account yet.")
+            with history_tab_d:
+                if related_notifications:
+                    notification_rows = [
+                        {
+                            "WHEN": row.get("created_at_utc") or "-",
+                            "EVENT": row.get("event_type") or "-",
+                            "TARGET": row.get("target_email") or "-",
+                            "CHANNEL": row.get("delivery_channel") or "-",
+                            "STATUS": row.get("delivery_status") or "-",
+                        }
+                        for row in related_notifications
+                    ]
+                    st.dataframe(notification_rows, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No notification history for this account yet.")
+            if related_ips:
+                st.markdown("##### Related IPs")
+                st.dataframe([{"IP": ip_value} for ip_value in related_ips], use_container_width=True, hide_index=True)
         else:
             st.info("No accounts registered yet.")
 
