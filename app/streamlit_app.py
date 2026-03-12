@@ -1621,8 +1621,27 @@ def render_central_console() -> None:
                 agent_total[col] = int(agent_df[col].sum())
         agent_df = pd.concat([agent_df, pd.DataFrame([agent_total])], ignore_index=True)
 
+        email_rows = [
+            {
+                "VERTICAL": "COMMUNICATIONS",
+                "LINE": "Email",
+                "NEW": 0,
+                "SENT": 0,
+                "SUPPORT TICKETS": 0,
+                "BUSINESS OPPORTUNITIES": 0,
+                "GENERAL": 0,
+            }
+        ]
+        email_df = pd.DataFrame(email_rows)
+        email_total = {"VERTICAL": "TOTAL", "LINE": "TOTAL"}
+        for col in email_df.columns:
+            if col not in {"VERTICAL", "LINE"}:
+                email_total[col] = int(email_df[col].sum())
+        email_df = pd.concat([email_df, pd.DataFrame([email_total])], ignore_index=True)
+
         _render_console_table_html(prod_df, total_row_index=len(prod_df) - 1)
         _render_console_table_html(agent_df, total_row_index=len(agent_df) - 1)
+        _render_console_table_html(email_df, total_row_index=len(email_df) - 1)
 
     with technical_tab:
         render_dry_run_dashboard()
