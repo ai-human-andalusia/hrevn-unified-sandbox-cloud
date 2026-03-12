@@ -2152,24 +2152,9 @@ def _render_real_estate_workspace(snapshot, context: dict, workspace: dict | Non
 
 
 def _render_legacy_panel_a(context: dict) -> None:
-    st.markdown("### Legacy Panel A — Operational Observation Panel")
-    st.caption("Recreated from `hrevn_panel.py`. Read-only comparison of the legacy observation workflow.")
-
-    visit = context["selected_visit"] or {}
-    asset = context["selected_asset"] or {}
     observations = context["selected_observations"]
     photos = context["selected_photos"]
     lpi_options = context["lpi_options"]
-
-    st.write(
-        {
-            "visit_id": visit.get("visit_id"),
-            "asset_id": visit.get("asset_id"),
-            "asset_public_id": asset.get("asset_public_id"),
-            "asset_template_type": asset.get("asset_template_type"),
-            "asset_type": asset.get("asset_type"),
-        }
-    )
 
     left, right = st.columns(2)
     with left:
@@ -3516,11 +3501,12 @@ def main() -> None:
         render_access_security_panel()
         return
 
-    tab_re, tab_actions, tab_arquitectura_status = st.tabs(
+    tab_re, tab_actions, tab_rwa, tab_arquitectura_status = st.tabs(
         [
             "Real Estate Vertical",
             "Agent Operations",
-                    "Arquitectura Status",
+            "RWA",
+            "Arquitectura Status",
         ]
     )
 
@@ -3528,6 +3514,17 @@ def main() -> None:
         render_real_estate_vertical()
     with tab_actions:
         render_controlled_actions_vertical()
+    with tab_rwa:
+        selected_visit = st.session_state.get("real_estate_selected_visit")
+        visit_ids = [visit.visit_id for visit in snapshot.visits]
+        if visit_ids:
+            if selected_visit not in visit_ids:
+                selected_visit = visit_ids[0]
+                st.session_state["real_estate_selected_visit"] = selected_visit
+            rwa_context = _prepare_real_estate_context(snapshot, selected_visit)
+            _render_legacy_panel_a(rwa_context)
+        else:
+            st.info("No Real Estate visits available yet.")
     with tab_arquitectura_status:
         render_dry_run_dashboard()
 
