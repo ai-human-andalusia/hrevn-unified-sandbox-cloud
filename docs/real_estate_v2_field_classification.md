@@ -6,6 +6,7 @@ This file classifies the Real Estate V2 model into:
 - building_admin fields
 - property_manager fields
 - extensible JSON fields
+- operational capture and output rules
 
 ## 1. Common account fields
 
@@ -14,6 +15,7 @@ Table: `re_accounts`
 Fixed columns:
 - `account_id`
 - `user_email`
+- `user_phone` (optional)
 - `user_role`
 - `subgroup`
 - `enterprise_id`
@@ -31,6 +33,7 @@ Common use:
 - subgroup routing
 - enterprise linkage
 - language and status
+- optional support contact
 
 ## 2. Common enterprise fields
 
@@ -91,6 +94,12 @@ Fixed columns:
 - `review_status`
 - `issuance_status`
 - `delivery_status`
+- `direct_capture_session_status`
+- `direct_capture_started_at_utc`
+- `direct_capture_last_activity_at_utc`
+- `direct_capture_closed_at_utc`
+- `direct_capture_closed_reason`
+- `direct_capture_window_minutes`
 - `created_at_utc`
 - `updated_at_utc`
 
@@ -100,6 +109,7 @@ JSON extension:
 Common use:
 - event/visit lifecycle
 - review/issuance/delivery tracking
+- capture window and closure state
 
 ## 5. Common observation fields
 
@@ -125,7 +135,7 @@ Common use:
 - structured issue severity
 - review blocking or approval
 
-## 6. Common photo fields
+## 6. Common direct-capture photo fields
 
 Table: `re_photos`
 
@@ -136,9 +146,13 @@ Fixed columns:
 - `observation_id`
 - `photo_filename`
 - `photo_hash_sha256`
+- `file_type`
+- `ingest_mode`
 - `photo_role`
 - `photo_status`
 - `captured_at_utc`
+- `added_to_record_at_utc`
+- `added_by_account_id`
 
 JSON extension:
 - `photo_data_json`
@@ -146,8 +160,34 @@ JSON extension:
 Common use:
 - evidence integrity
 - linking each photo to visit/asset/observation
+- distinguish `direct_capture` from `manual_upload`
 
-## 7. Common issuance fields
+## 7. Common manual attachment fields
+
+Table: `re_attachments`
+
+Fixed columns:
+- `attachment_id`
+- `visit_id`
+- `asset_id`
+- `observation_id`
+- `attachment_filename`
+- `attachment_hash_sha256`
+- `attachment_kind`
+- `ingest_mode`
+- `attachment_status`
+- `added_to_record_at_utc`
+- `added_by_account_id`
+
+JSON extension:
+- `attachment_data_json`
+
+Common use:
+- manually uploaded evidence
+- PDF, DOC, image or other file types
+- attachment traceability before closure
+
+## 8. Common issuance fields
 
 Table: `re_issuances`
 
@@ -167,8 +207,9 @@ JSON extension:
 Common use:
 - certificate and ZIP generation
 - integrity hashes
+- output summary for direct vs manual evidence
 
-## 8. Common delivery fields
+## 9. Common delivery fields
 
 Table: `re_deliveries`
 
@@ -189,7 +230,7 @@ Common use:
 - verification count
 - ZIP download count
 
-## 9. `building_admin` specific fields
+## 10. `building_admin` specific fields
 
 Recommended storage:
 - mostly in `asset_data_json`
@@ -211,7 +252,7 @@ Typical fields:
 When to promote to fixed columns:
 - only if queried constantly across most records
 
-## 10. `property_manager` specific fields
+## 11. `property_manager` specific fields
 
 Recommended storage:
 - mostly in `asset_data_json`
@@ -233,7 +274,7 @@ Typical fields:
 When to promote to fixed columns:
 - only if they become common reporting fields
 
-## 11. JSON strategy
+## 12. JSON strategy
 
 ### `profile_data_json`
 Use for:
@@ -257,6 +298,7 @@ Use for:
 - workflow-specific capture fields
 - scheduling context
 - service context
+- direct capture timeout metadata if needed
 
 ### `observation_data_json`
 Use for:
@@ -270,12 +312,20 @@ Use for:
 - photo title proposals
 - quality flags
 - capture notes
+- capture source metadata
+
+### `attachment_data_json`
+Use for:
+- PDF or document descriptors
+- signature context
+- upload notes
 
 ### `issuance_data_json`
 Use for:
 - issuance wording
 - template profile
 - blockchain/anchor metadata
+- production summary of direct capture count, manual upload count and capture window duration
 
 ### `delivery_data_json`
 Use for:
@@ -283,7 +333,22 @@ Use for:
 - resend history
 - download events detail
 
-## 12. Practical rule
+## 13. Output rules
+
+The final production output must explicitly reflect:
+- number of direct-capture images
+- number of manual uploads
+- direct capture window duration
+- whether the direct capture session auto-closed by inactivity
+- that auto-closure does not block validation or issuance by itself
+- that evidence added later entered as manual upload before final closure
+
+This information must appear in:
+- certificate / PDF output
+- manifest / ZIP package metadata
+- any review-ready verification output derived from the issuance
+
+## 14. Practical rule
 
 - fixed columns for common logic, filtering and counting
 - JSON for subgroup-specific richness
