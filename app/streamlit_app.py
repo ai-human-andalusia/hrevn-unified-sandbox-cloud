@@ -706,16 +706,72 @@ def _controlled_actions_status_label(value: str) -> str:
 
 
 def render_controlled_actions_vertical() -> None:
-    st.subheader("Agent Operations")
-    st.caption("Review-ready records for regulated AI operations that require human approval before execution.")
-
     snapshot = load_agent_operations_snapshot(AGENT_OPERATIONS_SQLITE_PATH)
     records = list(snapshot.records)
     records.sort(key=lambda item: (item["status"] != "pending_review", -int(item.get("risk_rank") or 0), item["record_id"]))
 
-    left, right = st.columns([1.0, 2.0])
+    if not records:
+        st.subheader("Agent Operations")
+        st.info("No records available.")
+        return
 
-    with left:
+    def risk_color(value: str) -> str:
+        colors = {"LOW": "#2f855a", "MEDIUM": "#b7791f", "HIGH": "#c53030", "CRITICAL": "#9b2c2c"}
+        return colors.get(str(value or "").upper(), "#4a5568")
+
+    def status_color(value: str) -> str:
+        colors = {
+            "pending_review": "#b7791f",
+            "approved_for_execution": "#2b6cb0",
+            "executed_sealed": "#2f855a",
+            "rejected": "#c53030",
+        }
+        return colors.get(value, "#4a5568")
+
+    def policy_color(value: str) -> str:
+        if "CISO" in str(value or "").upper() or "LEGAL" in str(value or "").upper():
+            return "#c53030"
+        if "DUAL" in str(value or "").upper():
+            return "#b7791f"
+        return "#2b6cb0"
+
+    selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
+    selected = next((item for item in records if item["record_id"] == selected_id), records[0])
+    st.session_state["agent_ops_selected_id"] = selected["record_id"]
+
+    st.markdown(
+        f"""
+        <style>
+        .agent-ops-header {{display:flex;justify-content:space-between;align-items:stretch;gap:16px;margin-bottom:18px;}}
+        .agent-ops-title {{font-size:1.75rem;font-weight:700;line-height:1.1;padding-top:4px;white-space:nowrap;}}
+        .agent-ops-status-row {{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;}}
+        .agent-ops-chip {{min-width:150px;padding:10px 12px;border-radius:12px;color:#fff;}}
+        .agent-ops-chip-label {{font-size:0.72rem;opacity:0.9;text-transform:uppercase;letter-spacing:0.03em;}}
+        .agent-ops-chip-value {{font-size:0.92rem;font-weight:700;line-height:1.2;margin-top:4px;}}
+        </style>
+        <div class="agent-ops-header">
+          <div class="agent-ops-title">Agent Operations</div>
+          <div class="agent-ops-status-row">
+            <div class="agent-ops-chip" style="background:{risk_color(selected['risk_level'])}">
+              <div class="agent-ops-chip-label">Risk Level</div>
+              <div class="agent-ops-chip-value">{selected['risk_level']}</div>
+            </div>
+            <div class="agent-ops-chip" style="background:{policy_color(selected['approval_policy'])}">
+              <div class="agent-ops-chip-label">Approval Policy</div>
+              <div class="agent-ops-chip-value">{selected['approval_policy']}</div>
+            </div>
+            <div class="agent-ops-chip" style="background:{status_color(selected['status'])}">
+              <div class="agent-ops-chip-label">Status</div>
+              <div class="agent-ops-chip-value">{_controlled_actions_status_label(selected['status'])}</div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    row_top_left, row_top_right = st.columns([1.05, 1.35])
+    with row_top_left:
         st.markdown("### Records")
         table_rows = [
             {
@@ -726,63 +782,68 @@ def render_controlled_actions_vertical() -> None:
             }
             for item in records
         ]
-        st.dataframe(table_rows, use_container_width=True, hide_index=True)
-        labels = [f"{item['record_id']} | {_controlled_actions_status_label(item['status'])}" for item in records]
-        selected_label = st.radio("Select record", labels, key="controlled_actions_selected")
-        selected_id = selected_label.split(" | ")[0]
-        selected = next(item for item in records if item["record_id"] == selected_id)
+        event = st.dataframe(
+            table_rows,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="agent_ops_records_table",
+        )
+        selection = event.selection.rows if hasattr(event, "selection") else []
+        if selection:
+            idx = selection[0]
+            st.session_state["agent_ops_selected_id"] = records[idx]["record_id"]
+            selected = records[idx]
+    with row_top_right:
+        st.markdown("### Proposed operation")
+        st.dataframe(
+            [
+                {"Field": "Record ID", "Value": selected["record_id"]},
+                {"Field": "Submitted at", "Value": selected["submitted_at_utc"]},
+                {"Field": "Agent", "Value": selected["agent_name"]},
+                {"Field": "Operation type", "Value": selected["operation_type"]},
+                {"Field": "Operation", "Value": selected["intent"]},
+                {"Field": "Tool", "Value": selected["tool_name"]},
+                {"Field": "Review reason", "Value": selected["review_reason"]},
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
-    with right:
-        top_a, top_b, top_c = st.columns(3)
-        top_a.metric("Risk level", selected["risk_level"])
-        top_b.metric("Approval policy", selected["approval_policy"])
-        top_c.metric("Status", _controlled_actions_status_label(selected["status"]))
-
-        st.markdown("### Review summary")
-        st.info(selected["review_reason"])
-
-        summary_col, auth_col = st.columns([1.15, 0.85])
-        with summary_col:
-            st.markdown("### Proposed operation")
-            st.dataframe(
-                [
-                    {"Field": "Record ID", "Value": selected["record_id"]},
-                    {"Field": "Submitted at", "Value": selected["submitted_at_utc"]},
-                    {"Field": "Agent", "Value": selected["agent_name"]},
-                    {"Field": "Operation type", "Value": selected["operation_type"]},
-                    {"Field": "Operation", "Value": selected["intent"]},
-                    {"Field": "Tool", "Value": selected["tool_name"]},
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-            st.markdown("### Operation parameters")
-            st.dataframe(
-                [{"Parameter": row["field"], "Value": row["value"], "Type": row["type"]} for row in selected["parameters"]],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-        with auth_col:
-            st.markdown("### Human authorization")
-            decision_rows = [
+    row_bottom_a, row_bottom_b, row_bottom_c = st.columns([0.9, 1.1, 1.0])
+    with row_bottom_a:
+        st.markdown("### Human authorization")
+        st.dataframe(
+            [
                 {"Control": "Decision", "State": selected["human_action"].replace("_", " ").title()},
                 {"Control": "Recommended", "State": "Yes" if selected["recommended_for_execution"] else "No"},
                 {"Control": "Seal status", "State": selected["seal_status"].replace("_", " ").title()},
-            ]
-            st.dataframe(decision_rows, use_container_width=True, hide_index=True)
-            if selected["status"] == "pending_review":
-                if st.button("Authorize and execute", type="primary", use_container_width=True, key=f"approve_{selected_id}"):
-                    set_agent_operation_decision(AGENT_OPERATIONS_SQLITE_PATH, selected_id, "approved")
-                    st.rerun()
-                if st.button("Reject", use_container_width=True, key=f"reject_{selected_id}"):
-                    set_agent_operation_decision(AGENT_OPERATIONS_SQLITE_PATH, selected_id, "rejected")
-                    st.rerun()
-            elif selected["status"] == "executed_sealed":
-                st.success("Operation authorized, executed and sealed.")
-            else:
-                st.error("Operation rejected. Rejection record sealed.")
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        if selected["status"] == "pending_review":
+            if st.button("Authorize and execute", type="primary", use_container_width=True, key=f"approve_{selected['record_id']}"):
+                set_agent_operation_decision(AGENT_OPERATIONS_SQLITE_PATH, selected["record_id"], "approved")
+                st.rerun()
+            if st.button("Reject", use_container_width=True, key=f"reject_{selected['record_id']}"):
+                set_agent_operation_decision(AGENT_OPERATIONS_SQLITE_PATH, selected["record_id"], "rejected")
+                st.rerun()
+        elif selected["status"] == "executed_sealed":
+            st.success("Operation authorized, executed and sealed.")
+        else:
+            st.error("Operation rejected. Rejection record sealed.")
 
+    with row_bottom_b:
+        st.markdown("### Operation parameters")
+        st.dataframe(
+            [{"Parameter": row["field"], "Value": row["value"], "Type": row["type"]} for row in selected["parameters"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with row_bottom_c:
         st.markdown("### Verification seal")
         st.dataframe(
             [
@@ -792,7 +853,6 @@ def render_controlled_actions_vertical() -> None:
             use_container_width=True,
             hide_index=True,
         )
-
         if selected["status"] != "pending_review":
             export_text = "\n".join([
                 f"Record: {selected['record_id']}",
@@ -804,7 +864,7 @@ def render_controlled_actions_vertical() -> None:
             st.download_button(
                 "Export regulated operation package",
                 data=export_text.encode("utf-8"),
-                file_name=f"{selected_id}_review_package.txt",
+                file_name=f"{selected['record_id']}_review_package.txt",
                 mime="text/plain",
                 use_container_width=True,
             )
