@@ -2819,15 +2819,21 @@ def _render_real_estate_v2_builder() -> None:
             selected_enterprise_row = enterprise_rows_by_id.get(enterprise_id)
             selected_enterprise_data = json.loads(selected_enterprise_row.get("enterprise_data_json") or "{}") if selected_enterprise_row else {}
             enterprise_assets = list_re_v2_assets_for_enterprise(enterprise_id) if enterprise_id else []
-            asset_options = {"No asset linked": ""}
-            asset_options.update({
-                f"{row['asset_name']} ({row['asset_public_id']})": row["asset_id"]
-                for row in enterprise_assets
-            })
+            asset_options = (
+                {f"{row['asset_name']} ({row['asset_public_id']})": row["asset_id"] for row in enterprise_assets}
+                if enterprise_assets
+                else {"No asset linked": ""}
+            )
+            current_asset_label = st.session_state.get("re_v2_user_asset_select")
+            valid_asset_labels = list(asset_options.keys())
+            default_asset_index = 0
+            if current_asset_label in valid_asset_labels:
+                default_asset_index = valid_asset_labels.index(current_asset_label)
             selected_asset_label = st.selectbox(
                 "Asset",
-                list(asset_options.keys()),
+                valid_asset_labels,
                 key="re_v2_user_asset_select",
+                index=default_asset_index,
                 disabled=not enterprise_id,
             )
             asset_id = asset_options[selected_asset_label]
@@ -2850,9 +2856,9 @@ def _render_real_estate_v2_builder() -> None:
                 or "-"
             )
 
-            st.text_input("Asset category", value=str(derived_asset_category), disabled=True, key="re_v2_user_asset_category_info")
-            st.text_input("Portfolio segment", value=str(derived_portfolio_segment), disabled=True, key="re_v2_user_portfolio_segment_info")
-            st.text_input("Property reference code", value=str(derived_property_reference), disabled=True, key="re_v2_user_property_ref_info")
+            st.text_input("Asset category", value=str(derived_asset_category), disabled=True, key="re_v2_user_asset_category_info", help="Auto-filled from the selected enterprise/asset.")
+            st.text_input("Portfolio segment", value=str(derived_portfolio_segment), disabled=True, key="re_v2_user_portfolio_segment_info", help="Auto-filled from the selected enterprise/asset.")
+            st.text_input("Property reference code", value=str(derived_property_reference), disabled=True, key="re_v2_user_property_ref_info", help="Auto-filled from the selected asset reference.")
             if subgroup == "building_admin" and enterprise_id and not asset_id:
                 st.caption("Select an asset to bind this building administrator to a concrete property context.")
             else:
@@ -2913,6 +2919,8 @@ def _render_real_estate_v2_builder() -> None:
         if st.button("Create enterprise", type="primary", key="re_v2_create_enterprise"):
             if not enterprise_name.strip():
                 st.warning("Enterprise name is required.")
+            elif any((row.get("enterprise_name") or "").strip().lower() == enterprise_name.strip().lower() for row in enterprises):
+                st.warning("An enterprise with that name already exists. Use the existing one instead of creating a duplicate.")
             else:
                 enterprise_data = {
                     "asset_category": asset_category,
@@ -2943,6 +2951,10 @@ def _render_real_estate_v2_builder() -> None:
                         "created_from": "enterprise_setup",
                     },
                 )
+                new_enterprise_label = f"{enterprise_name.strip()} ({enterprise_id})"
+                new_asset_label = f"{asset_name} ({asset_public_id})"
+                st.session_state["re_v2_user_enterprise_select"] = new_enterprise_label
+                st.session_state["re_v2_user_asset_select"] = new_asset_label
                 st.success(f"Enterprise created: {enterprise_id} | Initial asset created: {asset_public_id} ({asset_id})")
                 st.rerun()
 
