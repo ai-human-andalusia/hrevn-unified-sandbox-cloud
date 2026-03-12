@@ -1489,6 +1489,16 @@ def render_access_security_panel() -> None:
 
 
 def render_central_console() -> None:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stAppViewContainer"] {background:#eef4f8;}
+        [data-testid="stHeader"] {background:transparent;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     production_tab, technical_tab = st.tabs(["Production", "Technical Architecture"])
 
     with production_tab:
@@ -1498,29 +1508,18 @@ def render_central_console() -> None:
         visits = real_estate_snapshot.visits
         total_visits = len(visits)
         review_visits = len([row for row in visits if str(row.get("review_status") or "").upper() not in {"", "APPROVED", "FINAL", "DONE"}])
-        emitted_visits = len([row for row in visits if row.get("issued_at_utc") or str(row.get("certification_status") or "").upper() in {"ISSUED", "EMITTED", "CERTIFIED"}])
-        in_process_visits = max(0, total_visits - emitted_visits - review_visits)
         certificates_emitted = 0
         zips_emitted = 0
         emails_emitted = 0
         verify_clicks = 0
         zip_downloads = 0
 
-        def _status_label(event_count: int, done_count: int, review_count: int) -> str:
-            if review_count > 0:
-                return "IN REVIEW"
-            if done_count > 0 and done_count == event_count and event_count > 0:
-                return "TERMINATED"
-            if event_count > 0:
-                return "IN PROCESS"
-            return "IN PROCESS"
-
         production_rows = [
-            {"VERTICAL": "REAL ESTATE", "LINE": "Administradores de fincas", "EVENTS / VISITS": total_visits, "STATUS": _status_label(total_visits, emitted_visits, review_visits), "CERTIFICATES": certificates_emitted, "ZIPS": zips_emitted, "EMAILS": emails_emitted, "VERIFY": verify_clicks, "ZIP DOWNLOADS": zip_downloads},
-            {"VERTICAL": "REAL ESTATE", "LINE": "Property Manager", "EVENTS / VISITS": 0, "STATUS": "IN PROCESS", "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
-            {"VERTICAL": "REAL ESTATE", "LINE": "Family Office", "EVENTS / VISITS": 0, "STATUS": "IN PROCESS", "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
-            {"VERTICAL": "REAL ESTATE", "LINE": "Fondos de inversión", "EVENTS / VISITS": 0, "STATUS": "IN PROCESS", "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
-            {"VERTICAL": "ADMINISTRATION", "LINE": "Fotovoltaica", "EVENTS / VISITS": 0, "STATUS": "IN PROCESS", "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
+            {"VERTICAL": "REAL ESTATE", "LINE": "Administradores de fincas", "EVENTS / VISITS": total_visits, "IN REVIEW": review_visits, "CERTIFICATES": certificates_emitted, "ZIPS": zips_emitted, "EMAILS": emails_emitted, "VERIFY": verify_clicks, "ZIP DOWNLOADS": zip_downloads},
+            {"VERTICAL": "REAL ESTATE", "LINE": "Property Manager", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
+            {"VERTICAL": "REAL ESTATE", "LINE": "Family Office", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
+            {"VERTICAL": "REAL ESTATE", "LINE": "Fondos de inversión", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
+            {"VERTICAL": "ADMINISTRATION", "LINE": "Fotovoltaica", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
         ]
 
         agent_records = agent_snapshot.records
@@ -2499,13 +2498,6 @@ def main() -> None:
         return
 
     if target == "central_console":
-        top_left, top_right = st.columns([0.86, 0.14])
-        with top_left:
-            st.subheader("Central Console")
-        with top_right:
-            if st.button("Back to all panels", use_container_width=True):
-                st.session_state.pop("main_tab_target", None)
-                st.rerun()
         render_central_console()
         return
 
