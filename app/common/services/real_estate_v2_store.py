@@ -114,6 +114,30 @@ def list_re_v2_assets_for_enterprise(enterprise_id: str, db_path: Path | None = 
         return [dict(row) for row in rows]
 
 
+def list_re_v2_observations_raw(db_path: Path | None = None) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT observation_id, visit_id, asset_id, lpi_code, severity_0_5, observation_description, row_status, in_review_flag, observation_data_json, created_at_utc
+            FROM re_observations
+            ORDER BY created_at_utc DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def list_re_v2_photos_raw(db_path: Path | None = None) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT photo_id, visit_id, asset_id, observation_id, photo_filename, photo_hash_sha256, file_type, ingest_mode, photo_role, photo_status, captured_at_utc, added_to_record_at_utc, photo_data_json
+            FROM re_photos
+            ORDER BY added_to_record_at_utc DESC, captured_at_utc DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def list_re_v2_account_asset_links(db_path: Path | None = None) -> list[dict]:
     with _connect(db_path) as conn:
         rows = conn.execute(

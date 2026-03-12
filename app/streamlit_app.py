@@ -75,6 +75,8 @@ from common.services.real_estate_v2_store import (
     list_re_v2_assets,
     list_re_v2_assets_for_enterprise,
     list_re_v2_enterprises,
+    list_re_v2_observations_raw,
+    list_re_v2_photos_raw,
     list_re_v2_visits,
     list_re_v2_visits_raw,
     reset_and_seed_re_v2_demo,
@@ -2153,20 +2155,26 @@ def _render_real_estate_workspace(snapshot, context: dict, workspace: dict | Non
 
 
 def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> None:
-    observations = context["selected_observations"]
-    photos = context["selected_photos"]
     lpi_options = context["lpi_options"]
-    selected_visit = context.get("selected_visit") or {}
-    selected_asset = context.get("selected_asset") or {}
     all_assets = list_re_v2_assets()
     all_visits = list_re_v2_visits_raw()
+    all_observations = list_re_v2_observations_raw()
+    all_photos = list_re_v2_photos_raw()
 
     mode_key = f"{key_prefix}_mode"
     asset_key = f"{key_prefix}_asset"
+    asset_selectbox_key = f"{key_prefix}_asset_selectbox"
+    visit_draft_key = f"{key_prefix}_visit_draft_id"
+    observation_draft_key = f"{key_prefix}_observation_draft_id"
+
     if mode_key not in st.session_state:
-        st.session_state[mode_key] = "existing"
+        st.session_state[mode_key] = "new_visit"
     if asset_key not in st.session_state:
-        st.session_state[asset_key] = str(selected_asset.get("asset_id") or "")
+        st.session_state[asset_key] = ""
+    if visit_draft_key not in st.session_state:
+        st.session_state[visit_draft_key] = ""
+    if observation_draft_key not in st.session_state:
+        st.session_state[observation_draft_key] = ""
 
     asset_options = {"Select asset": ""}
     asset_options.update(
@@ -2177,6 +2185,17 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
         }
     )
     asset_labels = list(asset_options.keys())
+
+    def _build_visit_draft_id(asset_id: str) -> str:
+        asset_visits = [item for item in all_visits if str(item.get("asset_id") or "") == asset_id]
+        next_visit_number = len(asset_visits) + 1 if asset_id else 0
+        return f"RVI-DRAFT-{asset_id}-{next_visit_number:04d}" if asset_id else ""
+
+    def _build_observation_draft_id(visit_id: str) -> str:
+        visit_observations = [item for item in all_observations if str(item.get("visit_id") or "") == visit_id]
+        next_observation_number = len(visit_observations) + 1 if visit_id else 0
+        return f"ROB-DRAFT-{visit_id}-{next_observation_number:03d}" if visit_id else ""
+
     current_asset_id = st.session_state.get(asset_key, "")
     current_asset_label = next((label for label, value in asset_options.items() if value == current_asset_id), asset_labels[0])
 
@@ -2186,11 +2205,16 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
         if action_left.button("Nueva visita", key=f"{key_prefix}_new_visit", use_container_width=True):
             st.session_state[mode_key] = "new_visit"
             st.session_state[asset_key] = ""
+            st.session_state[visit_draft_key] = ""
+            st.session_state[observation_draft_key] = ""
+            st.session_state[asset_selectbox_key] = asset_labels[0]
             st.rerun()
         if action_right.button("Nueva observación", key=f"{key_prefix}_new_observation", use_container_width=True):
             st.session_state[mode_key] = "new_observation"
-            if not st.session_state.get(asset_key):
-                st.session_state[asset_key] = str(selected_asset.get("asset_id") or "")
+            asset_id_for_observation = st.session_state.get(asset_key, "")
+            if asset_id_for_observation and not st.session_state.get(visit_draft_key):
+                st.session_state[visit_draft_key] = _build_visit_draft_id(asset_id_for_observation)
+            st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state.get(visit_draft_key, ""))
             st.rerun()
 
         field_a, field_b = st.columns(2)
@@ -2199,32 +2223,26 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
                 "Asset",
                 asset_labels,
                 index=asset_labels.index(current_asset_label) if current_asset_label in asset_labels else 0,
-                key=f"{key_prefix}_asset_selectbox",
+                key=asset_selectbox_key,
             )
-            current_asset_id = asset_options[chosen_asset_label]
-            st.session_state[asset_key] = current_asset_id
+            chosen_asset_id = asset_options[chosen_asset_label]
+            previous_asset_id = st.session_state.get(asset_key, "")
+            st.session_state[asset_key] = chosen_asset_id
+            if chosen_asset_id != previous_asset_id:
+                st.session_state[visit_draft_key] = _build_visit_draft_id(chosen_asset_id)
+                if st.session_state.get(mode_key) == "new_observation":
+                    st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state[visit_draft_key])
+                else:
+                    st.session_state[observation_draft_key] = ""
 
+        current_asset_id = st.session_state.get(asset_key, "")
         current_asset_row = next((item for item in all_assets if str(item.get("asset_id") or "") == current_asset_id), None)
-        asset_visits = [item for item in all_visits if str(item.get("asset_id") or "") == current_asset_id]
-        next_visit_number = len(asset_visits) + 1 if current_asset_id else 1
-        generated_visit_id = f"VIS-{current_asset_id}-{next_visit_number:04d}" if current_asset_id else ""
-        current_visit_id = str(selected_visit.get("visit_id") or "")
-        display_visit_id = generated_visit_id if st.session_state.get(mode_key) in {"new_visit", "new_observation"} else current_visit_id
-
+        display_visit_id = st.session_state.get(visit_draft_key, "") if st.session_state.get(mode_key) in {"new_visit", "new_observation"} else ""
         with field_b:
-            st.text_input("Número de visita", value=display_visit_id, disabled=True, key=f"{key_prefix}_visit_number")
+            st.text_input("Número de visita", value=display_visit_id, disabled=True)
 
-        if st.session_state.get(mode_key) == "new_observation":
-            next_observation_number = len(observations) + 1
-            observation_display = f"OBS-{display_visit_id or 'NEW'}-{next_observation_number:03d}"
-        else:
-            observation_display = ""
-        st.text_input(
-            "Número de observación",
-            value=observation_display,
-            disabled=True,
-            key=f"{key_prefix}_observation_number",
-        )
+        observation_display = st.session_state.get(observation_draft_key, "") if st.session_state.get(mode_key) == "new_observation" else ""
+        st.text_input("Número de observación", value=observation_display, disabled=True)
         selected_observation = {}
 
         current_lpi = str(selected_observation.get("lpi_code") or "")
@@ -2263,14 +2281,17 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
 
     with right:
         st.markdown("#### Photos for current visit")
-        st.metric("Registered photos", len(photos))
-        enough = len(photos) >= min_photos if observations else False
-        if observations:
+        current_visit_photos = [item for item in all_photos if str(item.get("visit_id") or "") == display_visit_id]
+        st.metric("Registered photos", len(current_visit_photos))
+        enough = len(current_visit_photos) >= min_photos if current_visit_photos else False
+        if current_visit_photos:
             if enough:
-                st.success(f"Legacy rule satisfied: {len(photos)}/{min_photos} photos.")
+                st.success(f"Legacy rule satisfied: {len(current_visit_photos)}/{min_photos} photos.")
             else:
-                st.warning(f"Legacy rule not satisfied: {len(photos)}/{min_photos} photos.")
-        st.dataframe(photos, use_container_width=True)
+                st.warning(f"Legacy rule not satisfied: {len(current_visit_photos)}/{min_photos} photos.")
+        else:
+            st.info("No V2 photos registered for this visit yet.")
+        st.dataframe(current_visit_photos, use_container_width=True)
         st.file_uploader(
             "Upload photos (legacy flow preview)",
             type=["jpg", "jpeg", "png"],
