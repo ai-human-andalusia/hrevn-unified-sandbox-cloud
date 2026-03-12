@@ -3520,7 +3520,7 @@ def main() -> None:
         else:
             rwa_snapshot = load_real_estate_snapshot(REAL_ESTATE_SQLITE_PATH)
             selected_visit = st.session_state.get("real_estate_selected_visit")
-            visit_ids = [visit.visit_id for visit in rwa_snapshot.visits]
+            visit_ids = [str(visit.get("visit_id") or "") for visit in rwa_snapshot.visits if visit.get("visit_id")]
             if visit_ids:
                 if selected_visit not in visit_ids:
                     selected_visit = visit_ids[0]
