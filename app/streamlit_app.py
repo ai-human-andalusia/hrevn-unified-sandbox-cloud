@@ -290,6 +290,9 @@ def _render_auth_shell() -> None:
         if st.session_state.get("auth_role") == "admin":
             st.sidebar.markdown("### Admin space")
             st.sidebar.button("Central Console", disabled=True, use_container_width=True)
+            if st.sidebar.button("Access & Security", use_container_width=True):
+                st.session_state["main_tab_target"] = "access_security"
+                st.rerun()
             st.sidebar.markdown("#### Verticals")
             st.sidebar.button("Real Estate", disabled=True, use_container_width=True)
             st.sidebar.button("GOV / Photovoltaic", disabled=True, use_container_width=True)
@@ -449,6 +452,70 @@ def _render_auth_shell() -> None:
             st.dataframe(st.session_state["recovery_requests"], use_container_width=True)
 
     st.stop()
+
+
+def render_access_security_panel() -> None:
+    st.subheader("Access & Security")
+    st.caption("Administrative visibility over access events and active authentication sessions in the unified sandbox.")
+
+    snapshot = get_recent_auth_snapshot(AUTH_ACCESS_SQLITE_PATH, limit=50)
+    events = snapshot.get("events", [])
+    sessions = snapshot.get("sessions", [])
+
+    total_events = len(events)
+    login_success = sum(1 for row in events if row.get("event_type") in {"login_success", "login_success_demo"})
+    login_failure = sum(1 for row in events if row.get("event_type") == "login_failure")
+    active_sessions = sum(1 for row in sessions if row.get("session_state") == "active")
+
+    top_a, top_b, top_c, top_d = st.columns(4)
+    with top_a:
+        st.metric("Events tracked", total_events)
+    with top_b:
+        st.metric("Login success", login_success)
+    with top_c:
+        st.metric("Login failure", login_failure)
+    with top_d:
+        st.metric("Active sessions", active_sessions)
+
+    tab_events, tab_sessions = st.tabs(["Access Events", "Active Sessions"])
+
+    with tab_events:
+        if not events:
+            st.info("No access events recorded yet.")
+        else:
+            event_rows = [
+                {
+                    "WHEN": row.get("created_at_utc") or "-",
+                    "EVENT": row.get("event_type") or "-",
+                    "USER": row.get("user_email") or "-",
+                    "ROLE": row.get("user_role") or "-",
+                    "IDENTIFIER": row.get("identifier_attempted") or "-",
+                    "IP": row.get("ip_public") or "-",
+                    "RESULT": "success" if int(row.get("success_flag") or 0) else "failure",
+                    "REASON": row.get("failure_reason") or "-",
+                }
+                for row in events
+            ]
+            st.dataframe(event_rows, use_container_width=True, hide_index=True)
+
+    with tab_sessions:
+        if not sessions:
+            st.info("No auth sessions recorded yet.")
+        else:
+            session_rows = [
+                {
+                    "SESSION": row.get("session_id") or "-",
+                    "USER": row.get("user_email") or "-",
+                    "ROLE": row.get("user_role") or "-",
+                    "STATE": row.get("session_state") or "-",
+                    "IP": row.get("ip_public") or "-",
+                    "CREATED": row.get("created_at_utc") or "-",
+                    "LAST SEEN": row.get("last_seen_at_utc") or "-",
+                    "REVOKED": row.get("revoked_at_utc") or "-",
+                }
+                for row in sessions
+            ]
+            st.dataframe(session_rows, use_container_width=True, hide_index=True)
 
 
 def _prepare_real_estate_context(snapshot, visit_id: str) -> dict:
@@ -1384,6 +1451,17 @@ def main() -> None:
                 st.session_state.pop("main_tab_target", None)
                 st.rerun()
         render_controlled_actions_vertical()
+        return
+
+    if target == "access_security":
+        top_left, top_right = st.columns([0.86, 0.14])
+        with top_left:
+            st.subheader("Access & Security")
+        with top_right:
+            if st.button("Back to all panels", use_container_width=True):
+                st.session_state.pop("main_tab_target", None)
+                st.rerun()
+        render_access_security_panel()
         return
 
     tab_re, tab_actions, tab_schema, tab_mapping, tab_dryrun = st.tabs(
