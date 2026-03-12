@@ -3516,7 +3516,7 @@ def main() -> None:
         render_access_security_panel()
         return
 
-    tab_re, tab_actions, tab_schema, tab_mapping, tab_dryrun = st.tabs(
+    tab_re, tab_actions, tab_arquitectura_status = st.tabs(
         [
             "Real Estate Vertical",
             "Agent Operations",
@@ -3532,7 +3532,7 @@ def main() -> None:
         render_schema_explorer()
     with tab_mapping:
         render_mapping_validator()
-    with tab_dryrun:
+    with tab_arquitectura_status:
         render_dry_run_dashboard()
 
 
