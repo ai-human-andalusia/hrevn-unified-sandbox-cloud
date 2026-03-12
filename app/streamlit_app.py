@@ -63,6 +63,8 @@ from common.services.real_estate_sqlite import (
     load_real_estate_snapshot,
 )
 from common.services.real_estate_ai_review import review_real_estate_certification
+from common.services.rwa_v1_schema import ensure_rwa_v1_schema
+
 from common.services.real_estate_v2_store import (
     create_re_v2_account,
     create_re_v2_account_asset_link,
@@ -284,6 +286,7 @@ _I18N = {
         "real_estate": "Real Estate",
         "gov_photovoltaic": "GOV / Photovoltaic",
         "graphic_evidence": "Legal Evidence",
+        "rwa": "RWA",
         "genius_operations": "GENIUS Operations",
         "agent_operations": "Agent Operations",
         "email": "Email",
@@ -717,6 +720,9 @@ def _render_auth_shell() -> None:
                     st.rerun()
                 if st.button(_t("graphic_evidence"), use_container_width=True, key="sidebar_graphic"):
                     st.session_state["main_tab_target"] = "graphic_evidence"
+                    st.rerun()
+                if st.button(_t("rwa"), use_container_width=True, key="sidebar_rwa"):
+                    st.session_state["main_tab_target"] = "rwa"
                     st.rerun()
             system_verticals = st.sidebar.container(border=True)
             with system_verticals:
@@ -2335,6 +2341,7 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
 
 
 def _render_rwa_placeholder() -> None:
+    ensure_rwa_v1_schema()
     mode_key = "rwa_mode"
     asset_key = "rwa_asset"
     asset_selectbox_key = "rwa_asset_selectbox"
@@ -3673,6 +3680,10 @@ def main() -> None:
 
     if target == "graphic_evidence":
         render_graphic_evidence_vertical()
+        return
+
+    if target == "rwa":
+        _render_rwa_placeholder()
         return
 
     if target == "genius_operations":
