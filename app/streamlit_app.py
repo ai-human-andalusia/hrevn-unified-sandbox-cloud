@@ -2810,10 +2810,19 @@ def _render_real_estate_v2_builder() -> None:
             user_phone = st.text_input("User phone (optional)", key="re_v2_user_phone")
             preferred_language = st.selectbox("Preferred language", ["en", "es"], key="re_v2_user_lang")
         with col2:
+            pending_enterprise_label = st.session_state.pop("re_v2_pending_enterprise_label", None)
+            enterprise_labels = list(enterprise_options.keys())
+            enterprise_default_index = 0
+            current_enterprise_label = st.session_state.get("re_v2_user_enterprise_select")
+            if pending_enterprise_label in enterprise_labels:
+                enterprise_default_index = enterprise_labels.index(pending_enterprise_label)
+            elif current_enterprise_label in enterprise_labels:
+                enterprise_default_index = enterprise_labels.index(current_enterprise_label)
             selected_enterprise_label = st.selectbox(
                 "Enterprise",
-                list(enterprise_options.keys()),
+                enterprise_labels,
                 key="re_v2_user_enterprise_select",
+                index=enterprise_default_index,
             )
             enterprise_id = enterprise_options[selected_enterprise_label]
             selected_enterprise_row = enterprise_rows_by_id.get(enterprise_id)
@@ -2824,7 +2833,7 @@ def _render_real_estate_v2_builder() -> None:
                 if enterprise_assets
                 else {"No asset linked": ""}
             )
-            current_asset_label = st.session_state.get("re_v2_user_asset_select")
+            current_asset_label = st.session_state.pop("re_v2_pending_asset_label", None) or st.session_state.get("re_v2_user_asset_select")
             valid_asset_labels = list(asset_options.keys())
             default_asset_index = 0
             if current_asset_label in valid_asset_labels:
@@ -2953,8 +2962,8 @@ def _render_real_estate_v2_builder() -> None:
                 )
                 new_enterprise_label = f"{enterprise_name.strip()} ({enterprise_id})"
                 new_asset_label = f"{asset_name} ({asset_public_id})"
-                st.session_state["re_v2_user_enterprise_select"] = new_enterprise_label
-                st.session_state["re_v2_user_asset_select"] = new_asset_label
+                st.session_state["re_v2_pending_enterprise_label"] = new_enterprise_label
+                st.session_state["re_v2_pending_asset_label"] = new_asset_label
                 st.success(f"Enterprise created: {enterprise_id} | Initial asset created: {asset_public_id} ({asset_id})")
                 st.rerun()
 
