@@ -969,10 +969,30 @@ def render_controlled_actions_vertical() -> None:
     with row_bottom_c:
         _render_panel_section_title("Execution Record")
         if package_payload is None:
+            pending_artifacts = [
+                "operation_record.json",
+                "approval_record.json",
+                "execution_record.json",
+                "manifest.json",
+                "CHECKSUMS.sha256",
+                "ROOT_HASH_SHA256.txt",
+                "agent_operation_review_report.pdf",
+            ]
             st.dataframe(
                 [
-                    {"FIELD": "Seal reference", "VALUE": selected["seal_reference"] or "Pending decision"},
-                    {"FIELD": "AER package", "VALUE": "Waiting for human decision"},
+                    {"FIELD": "AER ID", "VALUE": f"AER-{selected['record_id']}"},
+                    {"FIELD": "Seal reference", "VALUE": "Pending decision"},
+                    {"FIELD": "Manifest hash", "VALUE": "Pending generation"},
+                    {"FIELD": "Root hash", "VALUE": "Pending generation"},
+                    {"FIELD": "ZIP package", "VALUE": "Pending generation"},
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.dataframe(
+                [
+                    {"ARTIFACT": name, "STATE": "Pending", "DETAIL": "Will be generated after approval or rejection"}
+                    for name in pending_artifacts
                 ],
                 use_container_width=True,
                 hide_index=True,
