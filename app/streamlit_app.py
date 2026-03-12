@@ -18,6 +18,14 @@ from common.services.ai_router import choose_ai_provider
 from common.services.gmail_connector import get_mail_connector_status
 from common.services.github_connector import get_github_connector_status
 from common.services.agent_operations_package import AERSigningConfig, build_agent_operation_aer_package
+from common.services.auth_access_sqlite import (
+    AuthRequestContext,
+    create_auth_session,
+    get_recent_auth_snapshot,
+    log_auth_event,
+    revoke_auth_session,
+    touch_auth_session,
+)
 from common.services.agent_operations_sqlite import (
     load_agent_operations_snapshot,
     set_agent_operation_decision,
@@ -43,6 +51,7 @@ TESTS_DIR = ROOT / "tests"
 APP_DATA_DIR = ROOT / "app" / "data"
 REAL_ESTATE_SQLITE_PATH = APP_DATA_DIR / "real_estate" / "hrevn_real_estate.db"
 AGENT_OPERATIONS_SQLITE_PATH = APP_DATA_DIR / "agent_operations" / "hrevn_agent_operations.db"
+AUTH_ACCESS_SQLITE_PATH = APP_DATA_DIR / "auth" / "hrevn_auth_access.db"
 
 
 @dataclass
@@ -221,17 +230,53 @@ def _load_aer_signing_config() -> AERSigningConfig:
     )
 
 
+def _get_auth_request_context() -> AuthRequestContext:
+    headers = {}
+    try:
+        headers = dict(getattr(st.context, "headers", {}) or {})
+    except Exception:
+        headers = {}
+
+    forwarded_for = str(headers.get("X-Forwarded-For") or headers.get("x-forwarded-for") or "").strip()
+    ip_public = forwarded_for.split(",")[0].strip() if forwarded_for else "unknown"
+    user_agent = str(headers.get("User-Agent") or headers.get("user-agent") or "unknown").strip()[:240]
+    origin = str(headers.get("Origin") or headers.get("origin") or headers.get("Host") or headers.get("host") or "streamlit_cloud").strip()[:240]
+    return AuthRequestContext(
+        ip_public=ip_public or "unknown",
+        user_agent=user_agent or "unknown",
+        request_origin=origin or "streamlit_cloud",
+    )
+
+
 def _init_auth_state() -> None:
     st.session_state.setdefault("auth_logged_in", False)
     st.session_state.setdefault("auth_role", "guest")
     st.session_state.setdefault("auth_email", "")
+    st.session_state.setdefault("auth_session_id", "")
     st.session_state.setdefault("recovery_requests", [])
 
 
 def _logout() -> None:
+    session_id = st.session_state.get("auth_session_id") or ""
+    auth_email = st.session_state.get("auth_email") or None
+    auth_role = st.session_state.get("auth_role") or None
+    if session_id:
+        context = _get_auth_request_context()
+        revoke_auth_session(AUTH_ACCESS_SQLITE_PATH, session_id)
+        log_auth_event(
+            AUTH_ACCESS_SQLITE_PATH,
+            user_email=auth_email,
+            user_role=auth_role,
+            identifier_attempted=auth_email,
+            event_type="logout",
+            success_flag=True,
+            failure_reason=None,
+            context=context,
+        )
     st.session_state["auth_logged_in"] = False
     st.session_state["auth_role"] = "guest"
     st.session_state["auth_email"] = ""
+    st.session_state["auth_session_id"] = ""
 
 
 def _render_auth_shell() -> None:
@@ -239,6 +284,9 @@ def _render_auth_shell() -> None:
     _init_auth_state()
 
     if st.session_state.get("auth_logged_in"):
+        active_session_id = st.session_state.get("auth_session_id") or ""
+        if active_session_id:
+            touch_auth_session(AUTH_ACCESS_SQLITE_PATH, active_session_id)
         if st.session_state.get("auth_role") == "admin":
             st.sidebar.markdown("### Admin space")
             st.sidebar.button("Central Console", disabled=True, use_container_width=True)
@@ -266,6 +314,7 @@ def _render_auth_shell() -> None:
             email = st.text_input("Email", key="login_email")
             password = st.text_input("Password", type="password", key="login_password")
             if st.button("Access workspace", type="primary"):
+                context = _get_auth_request_context()
                 matched = None
                 if cfg.admin_email and cfg.admin_password and email.strip().lower() == cfg.admin_email.strip().lower() and password == cfg.admin_password:
                     matched = ("admin", cfg.admin_email)
@@ -273,21 +322,66 @@ def _render_auth_shell() -> None:
                     matched = ("operator", cfg.user_email)
 
                 if matched:
+                    session_id = create_auth_session(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=matched[1],
+                        user_role=matched[0],
+                        context=context,
+                    )
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=matched[1],
+                        user_role=matched[0],
+                        identifier_attempted=email.strip().lower() or None,
+                        event_type="login_success",
+                        success_flag=True,
+                        failure_reason=None,
+                        context=context,
+                    )
                     st.session_state["auth_logged_in"] = True
                     st.session_state["auth_role"] = matched[0]
                     st.session_state["auth_email"] = matched[1]
+                    st.session_state["auth_session_id"] = session_id
                     st.success("Access granted.")
                     st.rerun()
                 elif cfg.auth_enabled and cfg.has_configured_accounts:
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=None,
+                        user_role=None,
+                        identifier_attempted=email.strip().lower() or None,
+                        event_type="login_failure",
+                        success_flag=False,
+                        failure_reason="invalid_credentials",
+                        context=context,
+                    )
                     st.error("Invalid credentials.")
                 else:
                     st.warning("Auth shell is not fully configured yet. Use documentary demo access below.")
 
             if (not cfg.auth_enabled) or (not cfg.has_configured_accounts):
                 if st.button("Continue in documentary demo mode"):
+                    context = _get_auth_request_context()
+                    session_id = create_auth_session(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email="demo@hrevn.local",
+                        user_role="demo",
+                        context=context,
+                    )
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email="demo@hrevn.local",
+                        user_role="demo",
+                        identifier_attempted="demo@hrevn.local",
+                        event_type="login_success_demo",
+                        success_flag=True,
+                        failure_reason=None,
+                        context=context,
+                    )
                     st.session_state["auth_logged_in"] = True
                     st.session_state["auth_role"] = "demo"
                     st.session_state["auth_email"] = "demo@hrevn.local"
+                    st.session_state["auth_session_id"] = session_id
                     st.rerun()
         with right:
             st.markdown("#### Access status")
@@ -298,6 +392,20 @@ def _render_auth_shell() -> None:
                 {"Item": "Workspace scope", "State": "sandbox only"},
             ]
             st.dataframe(status_rows, use_container_width=True, hide_index=True)
+            if cfg.auth_enabled and st.session_state.get("auth_role") == "admin":
+                snapshot = get_recent_auth_snapshot(AUTH_ACCESS_SQLITE_PATH, limit=8)
+                if snapshot["events"]:
+                    st.markdown("#### Recent access events")
+                    event_rows = [
+                        {
+                            "Event": row["event_type"],
+                            "Identifier": row["identifier_attempted"] or row["user_email"] or "-",
+                            "IP": row["ip_public"] or "-",
+                            "At": row["created_at_utc"],
+                        }
+                        for row in snapshot["events"]
+                    ]
+                    st.dataframe(event_rows, use_container_width=True, hide_index=True)
             st.info(
                 "This layer gives us the structure for login and recovery now. Real credential hardening can be attached later through Streamlit secrets."
             )
@@ -311,6 +419,7 @@ def _render_auth_shell() -> None:
             disabled=True,
         )
         if st.button("Request recovery"):
+            context = _get_auth_request_context()
             requests = list(st.session_state.get("recovery_requests", []))
             requests.append(
                 {
@@ -320,6 +429,16 @@ def _render_auth_shell() -> None:
                 }
             )
             st.session_state["recovery_requests"] = requests[-20:]
+            log_auth_event(
+                AUTH_ACCESS_SQLITE_PATH,
+                user_email=None,
+                user_role=None,
+                identifier_attempted=recovery_email.strip().lower() or None,
+                event_type="password_reset_requested",
+                success_flag=True,
+                failure_reason=None,
+                context=context,
+            )
             if cfg.recovery_notify_email:
                 st.success("Recovery request recorded. Delivery is configured for the secure notification path.")
             else:
