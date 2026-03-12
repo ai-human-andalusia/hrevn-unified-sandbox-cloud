@@ -6,6 +6,7 @@ No real access, no external source systems, documentary-safe views only.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 from dataclasses import dataclass
 from pathlib import Path
@@ -1489,131 +1490,114 @@ def render_access_security_panel() -> None:
 
 
 def render_central_console() -> None:
-    st.subheader("Central Console")
-    st.caption("Executive business view and technical architecture view for the unified sandbox.")
+    production_tab, technical_tab = st.tabs(["Production", "Technical Architecture"])
 
-    business_tab, technical_tab = st.tabs(["Business", "Technical Architecture"])
-
-    with business_tab:
-        snapshot = get_recent_auth_snapshot(AUTH_ACCESS_SQLITE_PATH, limit=100)
+    with production_tab:
+        snapshot = get_recent_auth_snapshot(AUTH_ACCESS_SQLITE_PATH, limit=200)
         accounts = snapshot.get("accounts", [])
         events = snapshot.get("events", [])
         sessions = snapshot.get("sessions", [])
         notifications = snapshot.get("notifications", [])
         ip_controls = snapshot.get("ip_controls", [])
 
+        cfg = load_common_config()
+        mail_status = get_mail_connector_status(cfg)
+
+        now = datetime.now(timezone.utc)
+        cutoff_24h = now - timedelta(hours=24)
+
+        def _parse_utc_local(value: str | None):
+            if not value:
+                return None
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+            except Exception:
+                return None
+
+        recent_events = [row for row in events if (_parse_utc_local(row.get("created_at_utc")) or now) >= cutoff_24h]
+        recent_notifications = [row for row in notifications if (_parse_utc_local(row.get("created_at_utc")) or now) >= cutoff_24h]
+
         locked_accounts = [row for row in accounts if row.get("lockout_until_utc")]
         suspended_accounts = [row for row in accounts if row.get("account_status") == "suspended"]
-        closed_accounts = [row for row in accounts if row.get("account_status") == "closed"]
         blocked_ips = [row for row in ip_controls if row.get("blocked_until_utc")]
-        cooldown_ips = [row for row in ip_controls if row.get("cooldown_until_utc") and not row.get("blocked_until_utc")]
         active_sessions = [row for row in sessions if row.get("session_state") == "active"]
-        failed_events = [row for row in events if int(row.get("success_flag") or 0) == 0]
-        critical_notifications = [
-            row for row in notifications
-            if (row.get("event_type") or "") in {
-                "user_lockout",
-                "ip_cooldown",
-                "ip_blocked",
-                "account_suspended",
-                "account_closed",
-                "sessions_revoked_by_admin",
-            }
-        ]
 
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
-        m1.metric("Accounts", len(accounts))
-        m2.metric("Active sessions", len(active_sessions))
-        m3.metric("Locked accounts", len(locked_accounts))
-        m4.metric("Suspended", len(suspended_accounts))
-        m5.metric("Blocked IPs", len(blocked_ips))
-        m6.metric("Critical alerts", len(critical_notifications))
+        unread_inbox = 0
+        support_tickets = 0
+        business_opportunities = 0
+        general_email = 0
 
-        row_left, row_right = st.columns([1.15, 0.85])
-        with row_left:
-            st.markdown("##### Current risk picture")
-            risk_rows = [
-                {"AREA": "Accounts", "STATE": "locked", "COUNT": len(locked_accounts)},
-                {"AREA": "Accounts", "STATE": "suspended", "COUNT": len(suspended_accounts)},
-                {"AREA": "Accounts", "STATE": "closed", "COUNT": len(closed_accounts)},
-                {"AREA": "IPs", "STATE": "cooldown", "COUNT": len(cooldown_ips)},
-                {"AREA": "IPs", "STATE": "blocked", "COUNT": len(blocked_ips)},
-                {"AREA": "Access", "STATE": "failed events", "COUNT": len(failed_events)},
+        login_success_24h = len([row for row in recent_events if (row.get("event_type") or "") in {"login_success", "login_success_demo"} and int(row.get("success_flag") or 0) == 1])
+        login_failure_24h = len([row for row in recent_events if (row.get("event_type") or "") == "login_failure"])
+        recovery_24h = len([row for row in recent_events if (row.get("event_type") or "") in {"password_reset_requested", "password_reset_completed", "password_reset_failure"}])
+        critical_alerts_24h = len([row for row in recent_notifications if (row.get("event_type") or "") in {"user_lockout", "ip_cooldown", "ip_blocked", "account_suspended", "account_closed", "account_reactivated", "sessions_revoked_by_admin", "ip_unblocked_by_admin"}])
+
+        email_admin_delivery = [row for row in recent_notifications if (row.get("target_email") or "").lower() == (_secret_value("SANDBOX_SECURITY_ALERT_EMAIL", "") or _secret_value("SANDBOX_RECOVERY_NOTIFY_EMAIL", "") or _secret_value("SANDBOX_ADMIN_EMAIL", "")).strip().lower() and (row.get("event_type") or "") in {"user_lockout", "ip_cooldown", "ip_blocked", "account_suspended", "account_closed", "account_reactivated", "sessions_revoked_by_admin", "ip_unblocked_by_admin"}]
+        telegram_delivery = [row for row in recent_notifications if (row.get("delivery_channel") or "") == "telegram" and (row.get("event_type") or "") in {"user_lockout", "ip_cooldown", "ip_blocked", "account_suspended", "account_closed", "account_reactivated", "sessions_revoked_by_admin", "ip_unblocked_by_admin"}]
+
+        prod_left, prod_right = st.columns([1, 1])
+
+        with prod_left:
+            st.markdown("##### Production")
+            p1, p2, p3, p4, p5, p6 = st.columns(6)
+            p1.metric("Accounts", len(accounts))
+            p2.metric("Active Sessions", len(active_sessions))
+            p3.metric("Locked", len(locked_accounts))
+            p4.metric("Suspended", len(suspended_accounts))
+            p5.metric("Blocked IPs", len(blocked_ips))
+            p6.metric("Critical Alerts", critical_alerts_24h)
+
+            st.markdown("##### Email")
+            e1, e2, e3, e4 = st.columns(4)
+            e1.metric("Received", unread_inbox + support_tickets + business_opportunities + general_email)
+            e2.metric("Unread", unread_inbox)
+            e3.metric("Support", support_tickets)
+            e4.metric("Business", business_opportunities)
+            e5, e6 = st.columns(2)
+            e5.metric("General", general_email)
+            e6.metric("Inbound Ready", "yes" if mail_status.inbound_sync_ready else "no")
+
+            email_rows = [
+                {"MODULE": "Email inbox", "STATE": "draft_pending_real_sync", "VALUE": unread_inbox + support_tickets + business_opportunities + general_email},
+                {"MODULE": "Unread", "STATE": "draft_pending_real_sync", "VALUE": unread_inbox},
+                {"MODULE": "Support tickets", "STATE": "draft_pending_real_sync", "VALUE": support_tickets},
+                {"MODULE": "Business opportunities", "STATE": "draft_pending_real_sync", "VALUE": business_opportunities},
+                {"MODULE": "General email", "STATE": "draft_pending_real_sync", "VALUE": general_email},
             ]
-            st.dataframe(risk_rows, use_container_width=True, hide_index=True)
+            st.dataframe(email_rows, use_container_width=True, hide_index=True)
 
-            st.markdown("##### Critical events")
-            critical_event_rows = [
-                {
-                    "WHEN": row.get("created_at_utc") or "-",
-                    "EVENT": row.get("event_type") or "-",
-                    "IDENTIFIER": row.get("identifier_attempted") or row.get("user_email") or "-",
-                    "IP": row.get("ip_public") or "-",
-                    "REASON": row.get("failure_reason") or "-",
-                }
-                for row in events
-                if (row.get("event_type") or "") in {
-                    "login_failure",
-                    "account_suspended",
-                    "account_closed",
-                    "sessions_revoked_by_admin",
-                    "ip_unblocked_by_admin",
-                }
-            ][:20]
-            if critical_event_rows:
-                st.dataframe(critical_event_rows, use_container_width=True, hide_index=True)
-            else:
-                st.info("No critical access events recorded yet.")
+        with prod_right:
+            st.markdown("##### Access & Login")
+            a1, a2, a3, a4 = st.columns(4)
+            a1.metric("Logins 24h", login_success_24h)
+            a2.metric("Failures 24h", login_failure_24h)
+            a3.metric("Recovery 24h", recovery_24h)
+            a4.metric("Alerts 24h", critical_alerts_24h)
 
-        with row_right:
-            st.markdown("##### Most exposed entities")
-            exposed_accounts = sorted(
-                [
-                    {
-                        "USER": row.get("user_email") or "-",
-                        "STATUS": row.get("account_status") or "-",
-                        "FAILED LOGINS": row.get("failed_login_count") or 0,
-                        "LOCKOUT": row.get("lockout_until_utc") or "-",
-                    }
-                    for row in accounts
-                ],
-                key=lambda item: (int(item["FAILED LOGINS"]), item["STATUS"] != "active"),
-                reverse=True,
-            )[:10]
-            if exposed_accounts:
-                st.dataframe(exposed_accounts, use_container_width=True, hide_index=True)
-            else:
-                st.info("No account exposure data yet.")
+            access_rows = [
+                {"MODULE": "Login activity", "STATE": "last_24h", "VALUE": login_success_24h},
+                {"MODULE": "Login failures", "STATE": "last_24h", "VALUE": login_failure_24h},
+                {"MODULE": "Recovery events", "STATE": "last_24h", "VALUE": recovery_24h},
+                {"MODULE": "Critical alerts", "STATE": "last_24h", "VALUE": critical_alerts_24h},
+            ]
+            st.dataframe(access_rows, use_container_width=True, hide_index=True)
 
-            st.markdown("##### IP pressure")
-            ip_rows = [
-                {
-                    "IP": row.get("ip_public") or "-",
-                    "FAILED LOGINS": row.get("failed_login_count") or 0,
-                    "COOLDOWN": row.get("cooldown_until_utc") or "-",
-                    "BLOCKED": row.get("blocked_until_utc") or "-",
-                }
-                for row in ip_controls
-            ][:10]
-            if ip_rows:
-                st.dataframe(ip_rows, use_container_width=True, hide_index=True)
-            else:
-                st.info("No IP control events yet.")
+            st.markdown("##### Alert Delivery")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Email Admin", len(email_admin_delivery))
+            d2.metric("Telegram", len(telegram_delivery))
+            d3.metric("SMTP Ready", "yes" if mail_status.outbound_ready else "no")
+            d4.metric("Recovery Ready", "yes" if mail_status.recovery_ready else "no")
 
-            st.markdown("##### Delivery health")
             delivery_rows = [
-                {
-                    "CHANNEL": row.get("delivery_channel") or "-",
-                    "EVENT": row.get("event_type") or "-",
-                    "STATUS": row.get("delivery_status") or "-",
-                    "TARGET": row.get("target_email") or "-",
-                }
-                for row in notifications[:12]
+                {"CHANNEL": "email_admin", "STATUS": "sent", "COUNT": len([row for row in email_admin_delivery if (row.get("delivery_status") or "") == "sent"])},
+                {"CHANNEL": "email_admin", "STATUS": "failed", "COUNT": len([row for row in email_admin_delivery if (row.get("delivery_status") or "") == "failed"])},
+                {"CHANNEL": "email_admin", "STATUS": "not_configured", "COUNT": len([row for row in email_admin_delivery if (row.get("delivery_status") or "") == "not_configured"])},
+                {"CHANNEL": "telegram", "STATUS": "sent", "COUNT": len([row for row in telegram_delivery if (row.get("delivery_status") or "") == "sent"])},
+                {"CHANNEL": "telegram", "STATUS": "failed", "COUNT": len([row for row in telegram_delivery if (row.get("delivery_status") or "") == "failed"])},
+                {"CHANNEL": "telegram", "STATUS": "not_configured", "COUNT": len([row for row in telegram_delivery if (row.get("delivery_status") or "") == "not_configured"])},
             ]
-            if delivery_rows:
-                st.dataframe(delivery_rows, use_container_width=True, hide_index=True)
-            else:
-                st.info("No notification delivery data yet.")
+            st.dataframe(delivery_rows, use_container_width=True, hide_index=True)
 
     with technical_tab:
         render_dry_run_dashboard()
