@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import streamlit as st
+import streamlit.components.v1 as components
 from common.config import load_common_config
 from common.security import evaluate_secret_posture, redact_config_for_ui
 from common.services.ai_router import choose_ai_provider
@@ -3032,7 +3033,7 @@ def _render_real_estate_v2_builder() -> None:
                       </div>
                     </div>
                     """
-                    st.markdown(relationship_html, unsafe_allow_html=True)
+                    components.html(relationship_html, height=max(320, 220 + len(selected_rows) * 130), scrolling=False)
             else:
                 st.dataframe([], use_container_width=True, hide_index=True)
         with t_visits:
