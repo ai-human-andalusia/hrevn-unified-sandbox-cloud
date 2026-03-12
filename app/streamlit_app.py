@@ -209,6 +209,9 @@ def _render_auth_shell() -> None:
             st.sidebar.button("Graphic Evidence", disabled=True, use_container_width=True)
             st.sidebar.button("GENIUS Operations", disabled=True, use_container_width=True)
             st.sidebar.button("Agent Operations", disabled=True, use_container_width=True)
+            st.sidebar.markdown("#### Communications")
+            st.sidebar.button("Email", disabled=True, use_container_width=True)
+            st.sidebar.button("Telegram", disabled=True, use_container_width=True)
         return
 
     st.title("HREVN Unified V1 — Access Shell")
