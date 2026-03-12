@@ -745,34 +745,29 @@ def render_controlled_actions_vertical() -> None:
     st.markdown(
         f"""
         <style>
-        .agent-ops-header {{display:flex;justify-content:space-between;align-items:stretch;gap:16px;margin-bottom:18px;}}
-        .agent-ops-header-left {{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap;}}
-        .agent-ops-title {{font-size:1.75rem;font-weight:700;line-height:1.1;padding:8px 0;white-space:nowrap;}}
-        .agent-ops-counter-row {{display:flex;gap:10px;flex-wrap:wrap;}}
-        .agent-ops-counter {{min-width:122px;padding:10px 12px;border-radius:12px;background:#edf2f7;color:#1a202c;border:1px solid #e2e8f0;}}
-        .agent-ops-counter-label {{font-size:0.72rem;opacity:0.9;text-transform:uppercase;letter-spacing:0.03em;}}
-        .agent-ops-counter-value {{font-size:1rem;font-weight:700;line-height:1.2;margin-top:4px;}}
-        .agent-ops-status-row {{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;}}
-        .agent-ops-chip {{min-width:150px;padding:10px 12px;border-radius:12px;color:#fff;}}
-        .agent-ops-chip-label {{font-size:0.72rem;opacity:0.9;text-transform:uppercase;letter-spacing:0.03em;}}
-        .agent-ops-chip-value {{font-size:0.92rem;font-weight:700;line-height:1.2;margin-top:4px;}}
+        .agent-ops-header {{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;align-items:start;}}
+        .agent-ops-counter-row {{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}}
+        .agent-ops-counter {{min-width:112px;padding:8px 10px;border-radius:10px;background:#edf2f7;color:#1a202c;border:1px solid #e2e8f0;}}
+        .agent-ops-counter-label {{font-size:0.68rem;opacity:0.9;text-transform:uppercase;letter-spacing:0.02em;}}
+        .agent-ops-counter-value {{font-size:0.92rem;font-weight:700;line-height:1.2;margin-top:4px;}}
+        .agent-ops-status-row {{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;}}
+        .agent-ops-chip {{min-width:118px;padding:8px 10px;border-radius:10px;color:#fff;}}
+        .agent-ops-chip-label {{font-size:0.68rem;opacity:0.9;text-transform:uppercase;letter-spacing:0.02em;}}
+        .agent-ops-chip-value {{font-size:0.84rem;font-weight:700;line-height:1.2;margin-top:4px;}}
         </style>
         <div class="agent-ops-header">
-          <div class="agent-ops-header-left">
-            <div class="agent-ops-title">Agent Operations</div>
-            <div class="agent-ops-counter-row">
-              <div class="agent-ops-counter">
-                <div class="agent-ops-counter-label">Pending Review</div>
-                <div class="agent-ops-counter-value">{pending_count}</div>
-              </div>
-              <div class="agent-ops-counter">
-                <div class="agent-ops-counter-label">Executed and Sealed</div>
-                <div class="agent-ops-counter-value">{executed_count}</div>
-              </div>
-              <div class="agent-ops-counter">
-                <div class="agent-ops-counter-label">Rejected</div>
-                <div class="agent-ops-counter-value">{rejected_count}</div>
-              </div>
+          <div class="agent-ops-counter-row">
+            <div class="agent-ops-counter">
+              <div class="agent-ops-counter-label">Pending Review</div>
+              <div class="agent-ops-counter-value">{pending_count}</div>
+            </div>
+            <div class="agent-ops-counter">
+              <div class="agent-ops-counter-label">Accepted</div>
+              <div class="agent-ops-counter-value">{executed_count}</div>
+            </div>
+            <div class="agent-ops-counter">
+              <div class="agent-ops-counter-label">Rejected</div>
+              <div class="agent-ops-counter-value">{rejected_count}</div>
             </div>
           </div>
           <div class="agent-ops-status-row">
