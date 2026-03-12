@@ -52,6 +52,10 @@ class CommonConfig:
     ai_primary_provider: str
     openai_enabled: bool
     openai_api_key_set: bool
+    openai_key_profile: str
+    openai_production_api_key_set: bool
+    openai_demo_api_key_set: bool
+    openai_comms_api_key_set: bool
     openai_model: str
     openai_api_base_url: str
 
@@ -98,11 +102,18 @@ def load_common_config() -> CommonConfig:
 
     openai_enabled = _as_bool(env.get("OPENAI_ENABLED"), default=True)
     gemini_enabled = _as_bool(env.get("GEMINI_ENABLED"), default=False)
+    openai_prod_key = (env.get("OPENAI_API_KEY_PRODUCTION") or env.get("OPENAI_API_KEY_PROD") or env.get("OPENAI_API_KEY") or "").strip()
+    openai_demo_key = (env.get("OPENAI_API_KEY_DEMO") or "").strip()
+    openai_comms_key = (env.get("OPENAI_API_KEY_COMMS") or "").strip()
 
     return CommonConfig(
         ai_primary_provider=(env.get("AI_PRIMARY_PROVIDER", "openai").strip().lower() or "openai"),
         openai_enabled=openai_enabled,
-        openai_api_key_set=bool(env.get("OPENAI_API_KEY", "").strip()),
+        openai_api_key_set=bool(openai_prod_key),
+        openai_key_profile="production",
+        openai_production_api_key_set=bool(openai_prod_key),
+        openai_demo_api_key_set=bool(openai_demo_key),
+        openai_comms_api_key_set=bool(openai_comms_key),
         openai_model=env.get("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
         openai_api_base_url=env.get("OPENAI_API_BASE_URL", "https://api.openai.com/v1").strip() or "https://api.openai.com/v1",
         gemini_enabled=gemini_enabled,

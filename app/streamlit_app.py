@@ -55,9 +55,11 @@ from common.services.agent_operations_sqlite import (
     set_agent_operation_decision,
 )
 from common.services.real_estate_sqlite import (
+    build_real_estate_end_to_end_preview,
     build_real_estate_workspace,
     load_real_estate_snapshot,
 )
+from common.services.real_estate_ai_review import review_real_estate_certification
 from common.services.telegram_connector import (
     get_telegram_connector_status,
     send_controlled_test_message,
@@ -245,6 +247,60 @@ def _secret_int(key: str, default: int) -> int:
         return int(raw)
     except Exception:
         return default
+
+
+
+def _openai_api_key_for(scope: str = "production") -> str:
+    scope = (scope or "production").strip().lower()
+    if scope == "demo":
+        return _secret_value("OPENAI_API_KEY_DEMO", "")
+    if scope in {"communications", "comms"}:
+        return _secret_value("OPENAI_API_KEY_COMMS", "")
+    return (
+        _secret_value("OPENAI_API_KEY_PRODUCTION", "")
+        or _secret_value("OPENAI_API_KEY_PROD", "")
+        or _secret_value("OPENAI_API_KEY", "")
+    )
+
+
+def _real_estate_delivery_target_email(cfg) -> str:
+    return (
+        st.session_state.get("auth_email", "")
+        or cfg.notify_email
+        or _secret_value("SANDBOX_SECURITY_ALERT_EMAIL", "")
+        or _secret_value("SANDBOX_ADMIN_EMAIL", "")
+    ).strip()
+
+
+def _send_real_estate_delivery_email(*, target_email: str, subject: str, body: str) -> dict[str, str]:
+    smtp_enabled = _secret_bool("SMTP_ENABLED", False)
+    smtp_host = _secret_value("SMTP_HOST", "")
+    smtp_port = _secret_int("SMTP_PORT", 587)
+    smtp_user = _secret_value("SMTP_USER", "")
+    smtp_pass = _secret_value("SMTP_PASS", "")
+    mail_from = _secret_value("MAIL_FROM", "") or _secret_value("SANDBOX_RECOVERY_NOTIFY_EMAIL", "")
+
+    if not target_email:
+        return {"delivery_status": "missing_target", "delivery_channel": "none"}
+    if not (smtp_enabled and smtp_host and smtp_user and smtp_pass and mail_from):
+        return {"delivery_status": "not_configured", "delivery_channel": "none"}
+
+    result = send_smtp_notification(
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        smtp_user=smtp_user,
+        smtp_pass=smtp_pass,
+        mail_from=mail_from,
+        target_email=target_email,
+        subject=subject,
+        body=body,
+    )
+    return {
+        "delivery_status": result.delivery_status,
+        "delivery_channel": result.delivery_channel,
+        "target_email": result.target_email,
+        "error_detail": result.error_detail or "",
+    }
 
 
 def _load_auth_shell_config() -> AuthShellConfig:
@@ -1656,7 +1712,7 @@ def _render_real_estate_overview(snapshot, context: dict, readiness: RealEstateR
         st.write({"cities": cities, "asset_count": len(assets), "visit_count": len(sessions)})
 
 
-def _render_real_estate_workspace(context: dict, workspace: dict | None, readiness: RealEstateReadiness, cfg) -> None:
+def _render_real_estate_workspace(snapshot, context: dict, workspace: dict | None, readiness: RealEstateReadiness, cfg) -> None:
     workspace = workspace or {}
     visit = workspace.get("visit") or context["selected_visit"] or {}
     asset = workspace.get("asset") or context["selected_asset"] or {}
@@ -1774,14 +1830,18 @@ def _render_real_estate_workspace(context: dict, workspace: dict | None, readine
         st.caption("Technical filename stays vertical-specific. Semantic title remains an AI suggestion layer.")
     with ai_col:
         st.markdown("### AI review state")
+        provider_choice = choose_ai_provider(cfg)
+        review_key = f"real_estate_ai_review::{visit.get('visit_id')}"
         quality_state = "ready_for_review" if photos else "blocked_no_photos"
+        existing_review = st.session_state.get(review_key)
         st.write(
             {
-                "provider": choose_ai_provider(cfg).selected,
-                "review_state": quality_state,
+                "provider": provider_choice.selected,
+                "key_profile": getattr(cfg, "openai_key_profile", "production"),
+                "review_state": existing_review.get("decision") if isinstance(existing_review, dict) else quality_state,
                 "blocking_policy": "block_if_inconsistencies_detected",
-                "semantic_titles_mode": "planned_common_contract",
-                "delivery_mode": "async_after_finalize",
+                "semantic_titles_mode": "ai_generated_at_issuance",
+                "delivery_mode": "async_like_after_validate_and_certify",
                 "blockchain_target": cfg.blockchain_target,
             }
         )
@@ -1789,9 +1849,113 @@ def _render_real_estate_workspace(context: dict, workspace: dict | None, readine
             sample_title = f"Proposed title: {asset.get('asset_public_id') or visit.get('asset_id') or 'asset'} / visit evidence / first image"
             st.text_area("Semantic title preview", value=sample_title, height=100, disabled=True)
 
+    st.markdown("### Certification gate")
+    action_col, result_col = st.columns([0.9, 1.1])
+    review_key = f"real_estate_ai_review::{visit.get('visit_id')}"
+    existing_review = st.session_state.get(review_key)
+    delivery_target = _real_estate_delivery_target_email(cfg)
+
+    with action_col:
+        st.caption("The AI review starts only when the operator validates and certifies the visit. It does not run during photo capture.")
+        st.text_input("Delivery target email", value=delivery_target or "", disabled=True)
+        trigger_disabled = not readiness.issuance_ready
+        if st.button("Validate and certify", use_container_width=True, disabled=trigger_disabled, key=f"re_validate_certify_{visit.get('visit_id')}"):
+            with st.spinner("Certification request accepted. Running AI review and issuance checks in the background..."):
+                review_result = review_real_estate_certification(
+                    workspace=workspace or {},
+                    provider=provider_choice.selected,
+                    model=cfg.openai_model,
+                    openai_api_key=_openai_api_key_for("production"),
+                    openai_api_base_url=cfg.openai_api_base_url,
+                    blockchain_target=cfg.blockchain_target,
+                    blockchain_enabled=cfg.blockchain_enabled,
+                ).to_dict()
+                preview = build_real_estate_end_to_end_preview(snapshot, str(visit.get("visit_id") or "")) if review_result.get("approved") else None
+                review_result["preview"] = preview
+                review_result["delivery_target_email"] = delivery_target
+                if review_result.get("approved"):
+                    success_body = (
+                        "Your certification request has passed H-REVN AI review and integrity checks.\n\n"
+                        f"Visit: {visit.get('visit_id')}\n"
+                        f"Asset: {asset.get('asset_public_id') or asset.get('asset_id')}\n"
+                        f"Root hash: {(preview or {}).get('certificate_preview', {}).get('root_hash_sha256', 'pending')}\n"
+                        f"Blockchain target: {cfg.blockchain_target} ({review_result.get('anchor_status')})\n\n"
+                        "A confirmation package can now be delivered from the operator workspace."
+                    )
+                    review_result["email_result"] = _send_real_estate_delivery_email(
+                        target_email=delivery_target,
+                        subject=f"H-REVN certification ready | {visit.get('visit_id')}",
+                        body=success_body,
+                    )
+                else:
+                    reasons = review_result.get("blocking_reasons") or ["AI review flagged the request for manual revision."]
+                    failure_body = (
+                        "Your certification request could not be completed automatically.\n\n"
+                        f"Visit: {visit.get('visit_id')}\n"
+                        f"Asset: {asset.get('asset_public_id') or asset.get('asset_id')}\n\n"
+                        "Please review the case in the operator workspace. Blocking reasons:\n- "
+                        + "\n- ".join(str(item) for item in reasons)
+                    )
+                    review_result["email_result"] = _send_real_estate_delivery_email(
+                        target_email=delivery_target,
+                        subject=f"H-REVN certification needs review | {visit.get('visit_id')}",
+                        body=failure_body,
+                    )
+                st.session_state[review_key] = review_result
+            st.rerun()
+
+        if trigger_disabled:
+            st.warning("This visit must satisfy the issuance readiness rules before AI review can start.")
+
+    with result_col:
+        if not existing_review:
+            st.info("No AI certification review has been executed yet for this visit. When the operator validates and certifies, H-REVN will run the AI review, evaluate the evidence set, and either continue to issuance or stop with an exact cause.")
+        else:
+            if existing_review.get("approved"):
+                st.success("AI review passed. The certification request cleared the pre-issuance gate.")
+            else:
+                st.error("AI review blocked the certification request. Manual revision is required before issuance.")
+            st.dataframe(
+                [
+                    {"FIELD": "Decision", "VALUE": existing_review.get("decision")},
+                    {"FIELD": "Execution mode", "VALUE": existing_review.get("execution_mode")},
+                    {"FIELD": "Review mode", "VALUE": existing_review.get("review_mode")},
+                    {"FIELD": "Reviewed at", "VALUE": existing_review.get("reviewed_at_utc")},
+                    {"FIELD": "Anchor status", "VALUE": existing_review.get("anchor_status")},
+                    {"FIELD": "Anchor target", "VALUE": existing_review.get("anchor_target")},
+                    {"FIELD": "Delivery email", "VALUE": (existing_review.get("email_result") or {}).get("delivery_status", "not_run")},
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.text_area("Review summary", value=str(existing_review.get("summary") or ""), height=110, disabled=True)
+            blockers = existing_review.get("blocking_reasons") or []
+            if blockers:
+                st.dataframe(pd.DataFrame({"BLOCKING REASONS": blockers}), use_container_width=True, hide_index=True)
+            semantic_titles = existing_review.get("semantic_titles") or []
+            if semantic_titles:
+                st.dataframe(pd.DataFrame(semantic_titles), use_container_width=True, hide_index=True)
+            preview = existing_review.get("preview") or {}
+            cert_preview = preview.get("certificate_preview") or {}
+            if cert_preview:
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {"FIELD": "Sequence", "VALUE": cert_preview.get("global_sequence_id")},
+                            {"FIELD": "Root hash", "VALUE": cert_preview.get("root_hash_sha256")},
+                            {"FIELD": "PDF hash", "VALUE": cert_preview.get("pdf_hash_sha256")},
+                            {"FIELD": "Verification URL", "VALUE": cert_preview.get("verification_url")},
+                        ]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            if existing_review.get("ai_error"):
+                st.caption(f"AI execution note: {existing_review.get('ai_error')}")
+
     st.markdown("### Finalization behavior")
     st.info(
-        "Target V1 behavior: when the operator finalizes the visit, the system moves to async issuance, runs AI pre-issuance checks, and delivers the certificate by email when ready. Anchoring remains configured against the selected blockchain target."
+        "When the operator validates and certifies, the system now runs the AI pre-issuance gate against the production OpenAI key path, reviews the evidence set, and either confirms delivery by email or stops the case with an explicit review cause. Blockchain anchoring remains configured against the selected target and is marked pending until wallet/provider execution is connected."
     )
 
 
@@ -2343,7 +2507,7 @@ def render_real_estate_vertical() -> None:
     with tab_overview:
         _render_real_estate_overview(snapshot, context, readiness)
     with tab_workspace:
-        _render_real_estate_workspace(context, workspace, readiness, cfg)
+        _render_real_estate_workspace(snapshot, context, workspace, readiness, cfg)
     with tab_a:
         _render_legacy_panel_a(context)
     with tab_b:
