@@ -199,9 +199,9 @@ def _render_auth_shell() -> None:
     _init_auth_state()
 
     if st.session_state.get("auth_logged_in"):
-        if st.sidebar.button("Log out"):
-            _logout()
-            st.rerun()
+        if st.session_state.get("auth_role") == "admin":
+            st.sidebar.markdown("### Admin space")
+            st.sidebar.caption("Clean placeholder pending future administrator design.")
         return
 
     st.title("HREVN Unified V1 — Access Shell")
@@ -1158,13 +1158,21 @@ def render_dry_run_dashboard() -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="HREVN Sandbox — Documentary Panels", layout="wide")
+    st.set_page_config(page_title="HREVN Sandbox — Documentary Panels", layout="wide", initial_sidebar_state="collapsed")
     _render_auth_shell()
 
-    st.title("HREVN UNIFIED V1 SANDBOX — Streamlit Panels")
-    st.caption(
-        "Documentary-only UI. No real source access, no SQLite writes, no real data reads outside the bundled sandbox snapshot."
-    )
+    head_left, head_right = st.columns([0.84, 0.16])
+    with head_left:
+        st.title("HREVN UNIFIED V1 SANDBOX — Streamlit Panels")
+        st.caption(
+            "Documentary-only UI. No real source access, no SQLite writes, no real data reads outside the bundled sandbox snapshot."
+        )
+    with head_right:
+        st.write("")
+        st.write("")
+        if st.button("Log out", use_container_width=True):
+            _logout()
+            st.rerun()
 
     tab_re, tab_actions, tab_schema, tab_mapping, tab_dryrun = st.tabs(
         [
