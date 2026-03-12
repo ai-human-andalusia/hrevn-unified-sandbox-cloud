@@ -441,6 +441,34 @@ def _send_telegram_security_alert(event_type: str, message: str) -> None:
     )
 
 
+def _send_admin_security_email_alert(event_type: str, subject: str, body: str) -> None:
+    target_email = (
+        _secret_value("SANDBOX_SECURITY_ALERT_EMAIL", "")
+        or _secret_value("SANDBOX_RECOVERY_NOTIFY_EMAIL", "")
+        or _secret_value("SANDBOX_ADMIN_EMAIL", "")
+    ).strip()
+    if not target_email:
+        log_auth_notification_event(
+            AUTH_ACCESS_SQLITE_PATH,
+            related_user_email=None,
+            target_email=target_email or None,
+            event_type=event_type,
+            delivery_channel="email_admin",
+            delivery_status="not_configured",
+            subject=subject,
+            error_detail=None,
+            details_json=json.dumps({"reason": "missing_admin_security_target", "body": body}),
+        )
+        return
+    _send_access_notification(
+        related_user_email=None,
+        target_email=target_email,
+        event_type=event_type,
+        subject=subject,
+        body=body,
+    )
+
+
 def _logout() -> None:
     session_id = st.session_state.get("auth_session_id") or ""
     auth_email = st.session_state.get("auth_email") or None
@@ -644,6 +672,11 @@ def _render_auth_shell() -> None:
                                 "user_lockout",
                                 f"H-REVN security alert: user lockout triggered for {email.strip().lower()} from IP {context.ip_public}.",
                             )
+                            _send_admin_security_email_alert(
+                                "user_lockout",
+                                "H-REVN security alert: user lockout",
+                                f"A temporary user lockout was triggered for {email.strip().lower()} from IP {context.ip_public}.\n\nEvent: user_lockout",
+                            )
                     else:
                         failure_reason = "invalid_credentials_or_password"
                     if ip_is_blocked(ip_result):
@@ -652,11 +685,21 @@ def _render_auth_shell() -> None:
                             "ip_blocked",
                             f"H-REVN security alert: IP blocked after repeated failed attempts. IP={context.ip_public}.",
                         )
+                        _send_admin_security_email_alert(
+                            "ip_blocked",
+                            "H-REVN security alert: IP blocked",
+                            f"An IP address has been blocked after repeated failed attempts.\n\nIP: {context.ip_public}\nEvent: ip_blocked",
+                        )
                     elif ip_is_in_cooldown(ip_result):
                         failure_reason = "ip_cooldown"
                         _send_telegram_security_alert(
                             "ip_cooldown",
                             f"H-REVN security alert: IP cooldown triggered. IP={context.ip_public}.",
+                        )
+                        _send_admin_security_email_alert(
+                            "ip_cooldown",
+                            "H-REVN security alert: IP cooldown",
+                            f"An IP address entered cooldown after repeated failed attempts.\n\nIP: {context.ip_public}\nEvent: ip_cooldown",
                         )
                     log_auth_event(
                         AUTH_ACCESS_SQLITE_PATH,
@@ -1131,6 +1174,11 @@ def render_access_security_panel() -> None:
                         "account_suspended",
                         f"H-REVN security alert: account suspended for {selected_account}.",
                     )
+                    _send_admin_security_email_alert(
+                        "account_suspended",
+                        "H-REVN security alert: account suspended",
+                        f"An account has been suspended.\n\nUser: {selected_account}\nReason: {(action_reason or '').strip() or 'No reason provided'}",
+                    )
                     st.success("Account suspended.")
                     st.rerun()
                 close_disabled = is_self or current_status == "closed" or not (action_reason or "").strip()
@@ -1170,6 +1218,11 @@ def render_access_security_panel() -> None:
                         "account_closed",
                         f"H-REVN security alert: account closed for {selected_account}.",
                     )
+                    _send_admin_security_email_alert(
+                        "account_closed",
+                        "H-REVN security alert: account closed",
+                        f"An account has been closed.\n\nUser: {selected_account}\nReason: {(action_reason or '').strip()}",
+                    )
                     st.success("Account closed.")
                     st.rerun()
                 if button_c.button("Reactivate", use_container_width=True, disabled=current_status == "active"):
@@ -1206,6 +1259,11 @@ def render_access_security_panel() -> None:
                         "account_reactivated",
                         f"H-REVN security alert: account reactivated for {selected_account}.",
                     )
+                    _send_admin_security_email_alert(
+                        "account_reactivated",
+                        "H-REVN security alert: account reactivated",
+                        f"An account has been reactivated.\n\nUser: {selected_account}\nReason: {(action_reason or '').strip() or 'No reason provided'}",
+                    )
                     st.success("Account reactivated.")
                     st.rerun()
                 if st.button("Revoke active sessions", use_container_width=True, key=f"revoke_sessions_{selected_account}"):
@@ -1227,6 +1285,11 @@ def render_access_security_panel() -> None:
                     _send_telegram_security_alert(
                         "sessions_revoked_by_admin",
                         f"H-REVN security alert: admin revoked {revoked} active session(s) for {selected_account}.",
+                    )
+                    _send_admin_security_email_alert(
+                        "sessions_revoked_by_admin",
+                        "H-REVN security alert: sessions revoked",
+                        f"An administrator revoked active sessions for an account.\n\nUser: {selected_account}\nRevoked sessions: {revoked}",
                     )
                     st.success(f"Revoked {revoked} active session(s).")
                     st.rerun()
@@ -1291,7 +1354,7 @@ def render_access_security_panel() -> None:
                             "WHEN": row.get("created_at_utc") or "-",
                             "EVENT": row.get("event_type") or "-",
                             "TARGET": row.get("target_email") or "-",
-                            "CHANNEL": row.get("delivery_channel") or "-",
+                            "CHANNEL": "email_admin" if row.get("delivery_channel") == "smtp" and (row.get("target_email") or "").lower() == (_secret_value("SANDBOX_SECURITY_ALERT_EMAIL", "") or _secret_value("SANDBOX_RECOVERY_NOTIFY_EMAIL", "") or _secret_value("SANDBOX_ADMIN_EMAIL", "")).strip().lower() and (row.get("event_type") or "") in {"user_lockout", "ip_cooldown", "ip_blocked", "account_suspended", "account_closed", "account_reactivated", "sessions_revoked_by_admin", "ip_unblocked_by_admin"} else (row.get("delivery_channel") or "-"),
                             "STATUS": row.get("delivery_status") or "-",
                         }
                         for row in related_notifications
@@ -1372,7 +1435,7 @@ def render_access_security_panel() -> None:
                     "EVENT": row.get("event_type") or "-",
                     "USER": row.get("related_user_email") or "-",
                     "TARGET": row.get("target_email") or "-",
-                    "CHANNEL": row.get("delivery_channel") or "-",
+                    "CHANNEL": "email_admin" if row.get("delivery_channel") == "smtp" and (row.get("target_email") or "").lower() == (_secret_value("SANDBOX_SECURITY_ALERT_EMAIL", "") or _secret_value("SANDBOX_RECOVERY_NOTIFY_EMAIL", "") or _secret_value("SANDBOX_ADMIN_EMAIL", "")).strip().lower() and (row.get("event_type") or "") in {"user_lockout", "ip_cooldown", "ip_blocked", "account_suspended", "account_closed", "account_reactivated", "sessions_revoked_by_admin", "ip_unblocked_by_admin"} else (row.get("delivery_channel") or "-"),
                     "STATUS": row.get("delivery_status") or "-",
                     "SUBJECT": row.get("subject") or "-",
                     "ERROR": row.get("error_detail") or "-",
@@ -1415,6 +1478,11 @@ def render_access_security_panel() -> None:
                     _send_telegram_security_alert(
                         "ip_unblocked_by_admin",
                         f"H-REVN security alert: admin unblocked IP {selected_ip}.",
+                    )
+                    _send_admin_security_email_alert(
+                        "ip_unblocked_by_admin",
+                        "H-REVN security alert: IP unblocked",
+                        f"An administrator unblocked an IP address.\n\nIP: {selected_ip}",
                     )
                     st.success("IP unblocked.")
                     st.rerun()
