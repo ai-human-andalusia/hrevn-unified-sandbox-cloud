@@ -821,8 +821,9 @@ def render_controlled_actions_vertical() -> None:
             },
         )
         selected_indices = [idx for idx, row in edited_rows.iterrows() if bool(row.get("OPEN"))]
-        if selected_indices:
-            chosen_idx = selected_indices[-1]
+        multi_open_conflict = len(selected_indices) > 1
+        if len(selected_indices) == 1:
+            chosen_idx = selected_indices[0]
             new_selected_id = records[int(chosen_idx)]["record_id"]
             if new_selected_id != current_selected_id:
                 st.session_state["agent_ops_selected_id"] = new_selected_id
@@ -832,7 +833,10 @@ def render_controlled_actions_vertical() -> None:
     current_selected_id = st.session_state.get("agent_ops_selected_id", records[0]["record_id"])
     selected = next((item for item in records if item["record_id"] == current_selected_id), records[0])
 
-    header_placeholder.markdown(
+    if multi_open_conflict:
+        header_placeholder.warning("OPEN is designed for a single record. Leave only one row selected to review the operation context.")
+    else:
+        header_placeholder.markdown(
         f"""
         <div class="agent-ops-header">
           <div class="agent-ops-counter-row">
@@ -867,6 +871,22 @@ def render_controlled_actions_vertical() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+    if multi_open_conflict:
+        with row_top_right:
+            _render_panel_section_title("Proposed Operation")
+            st.info("Select one record in Records to view its operation context.")
+        row_bottom_a, row_bottom_b, row_bottom_c = st.columns([0.92, 1.08, 1.0])
+        with row_bottom_a:
+            _render_panel_section_title("Human Authorization")
+            st.info("Single-record review required.")
+        with row_bottom_b:
+            _render_panel_section_title("Operation Parameters")
+            st.info("Single-record review required.")
+        with row_bottom_c:
+            _render_panel_section_title("Verification Seal")
+            st.info("Single-record review required.")
+        return
 
     with row_top_right:
         _render_panel_section_title("Proposed Operation")
