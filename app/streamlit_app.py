@@ -76,6 +76,7 @@ from common.services.real_estate_v2_store import (
     list_re_v2_assets_for_enterprise,
     list_re_v2_enterprises,
     list_re_v2_visits,
+    list_re_v2_visits_raw,
     reset_and_seed_re_v2_demo,
 )
 from common.services.telegram_connector import (
@@ -2157,8 +2158,8 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
     lpi_options = context["lpi_options"]
     selected_visit = context.get("selected_visit") or {}
     selected_asset = context.get("selected_asset") or {}
-    all_assets = context.get("all_assets") or []
-    all_visits = context.get("all_visits") or []
+    all_assets = list_re_v2_assets()
+    all_visits = list_re_v2_visits_raw()
 
     mode_key = f"{key_prefix}_mode"
     asset_key = f"{key_prefix}_asset"
