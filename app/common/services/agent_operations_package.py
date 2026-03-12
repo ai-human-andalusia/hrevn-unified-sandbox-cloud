@@ -48,6 +48,24 @@ def _normalize_state(record: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _full_seal_reference(record: dict[str, Any], normalized: dict[str, str], packaged_at_utc: str) -> str:
+    raw = "|".join(
+        [
+            str(record.get("record_id") or ""),
+            str(record.get("agent_id") or ""),
+            str(record.get("intent") or ""),
+            str(record.get("tool_name") or ""),
+            str(record.get("submitted_at_utc") or ""),
+            normalized["human_approval_status"],
+            str(record.get("reviewer_name") or ""),
+            str(record.get("reviewed_at_utc") or ""),
+            str(record.get("decision_rationale") or ""),
+            packaged_at_utc,
+        ]
+    )
+    return f"sha256:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
+
+
 def _build_report_pdf(record: dict[str, Any], operation_record: dict[str, Any], approval_record: dict[str, Any], execution_record: dict[str, Any]) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
@@ -70,12 +88,14 @@ def _build_report_pdf(record: dict[str, Any], operation_record: dict[str, Any], 
     line(f"Agent: {record['agent_name']} ({record['agent_role']})")
     line(f"Operation: {record['intent']}")
     line(f"Tool: {record['tool_name']}")
+    line(f"Proposed At: {operation_record['proposed_at_utc']}")
+    line(f"Packaged At: {operation_record['packaged_at_utc']}")
     line(f"Risk Level: {record['risk_level']}")
     line(f"Approval Policy: {record['approval_policy']}")
     line(f"Approval Status: {approval_record['human_approval_status']}")
     line(f"Reviewer: {approval_record['reviewer_name']} / {approval_record['reviewer_role']}")
     line(f"Execution Result: {execution_record['execution_result']}")
-    line(f"Seal Reference: {execution_record['seal_reference']}")
+    line(f"Seal Reference: {execution_record['seal_reference'][:48]}...")
     line("Decision Rationale:", 18, "Helvetica-Bold", 10)
     rationale = approval_record["decision_rationale"] or "No rationale recorded."
     chunks = [rationale[i:i + 105] for i in range(0, len(rationale), 105)] or ["No rationale recorded."]
@@ -91,14 +111,16 @@ def _build_report_pdf(record: dict[str, Any], operation_record: dict[str, Any], 
 
 
 def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
-    generated_at = _utc_now()
+    packaged_at_utc = _utc_now()
     aer_id = f"AER-{record['record_id']}"
     normalized = _normalize_state(record)
+    full_seal_reference = _full_seal_reference(record, normalized, packaged_at_utc)
 
     operation_record = {
         "aer_id": aer_id,
         "event_id": record["record_id"],
-        "timestamp": generated_at,
+        "proposed_at_utc": record.get("submitted_at_utc") or "",
+        "packaged_at_utc": packaged_at_utc,
         "workflow_id": record.get("workflow_id") or f"WF-{record['record_id']}",
         "agent_id": record.get("agent_id") or "",
         "agent_name": record.get("agent_name") or "",
@@ -125,9 +147,10 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
         "record_id": record["record_id"],
         "execution_result": normalized["execution_result"],
         "seal_status": normalized["seal_status"],
-        "seal_reference": record.get("seal_reference") or "",
+        "seal_reference": full_seal_reference,
+        "seal_reference_display": full_seal_reference[:31] + "...",
         "status": normalized["status"],
-        "generated_at_utc": generated_at,
+        "generated_at_utc": packaged_at_utc,
     }
 
     artifacts: dict[str, bytes] = {
@@ -150,7 +173,7 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
     manifest = {
         "aer_id": aer_id,
         "record_id": record["record_id"],
-        "generated_at_utc": generated_at,
+        "generated_at_utc": packaged_at_utc,
         "workflow_id": operation_record["workflow_id"],
         "package_type": "agent_operation_aer_demo_v1",
         "artifact_count": len(artifact_catalog),
@@ -172,6 +195,13 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
             "agent_operation_review_report.pdf",
             "manifest.json",
         ],
+        "root_serialization": {
+            "encoding": "utf-8",
+            "format": "filename:sha256",
+            "sort_order": "ascending filename",
+            "line_separator": "\\n",
+            "trailing_newline": False,
+        },
         "version": "aer_demo_v1",
     }
     manifest_bytes = _json_bytes(manifest)
@@ -182,7 +212,10 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
     root_basis = "\n".join(f"{name}:{sha}" for name, sha in sorted(root_hash_pairs, key=lambda item: item[0])).encode("utf-8")
     root_hash = _sha256_bytes(root_basis)
     artifacts["ROOT_HASH_SHA256.txt"] = (root_hash + "\n").encode("utf-8")
-    artifacts["ROOT_SPEC_AER_V1.txt"] = b"ROOT = sha256(sorted filename:sha256 pairs for root_scope files listed in manifest)\n"
+    artifacts["ROOT_SPEC_AER_V1.txt"] = (
+        "ROOT = sha256(sorted filename:sha256 pairs for root_scope files listed in manifest)\n"
+        "SERIALIZATION = UTF-8 text, '\\n' as line separator, no trailing newline after last line\n"
+    ).encode("utf-8")
 
     checksum_names = manifest["checksum_scope"]
     checksum_rows = [(name, _sha256_bytes(artifacts[name])) for name in checksum_names]
