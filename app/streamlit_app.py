@@ -380,19 +380,7 @@ def _is_admin_secret_email(cfg: AuthShellConfig, email: str) -> bool:
 
 
 def _reset_real_estate_v2_account_form() -> None:
-    defaults = {
-        "re_v2_account_subgroup": "building_admin",
-        "re_v2_user_email": "",
-        "re_v2_user_first_name": "",
-        "re_v2_user_last_name": "",
-        "re_v2_user_display_name": "",
-        "re_v2_user_phone": "",
-        "re_v2_user_lang": "en",
-        "re_v2_user_enterprise_select": "Standalone / no enterprise",
-        "re_v2_user_asset_select": "No asset linked",
-    }
-    for key, value in defaults.items():
-        st.session_state[key] = value
+    st.session_state["re_v2_account_form_reset_pending"] = True
 
 
 def _send_real_estate_delivery_email(*, target_email: str, subject: str, body: str) -> dict[str, str]:
@@ -2825,6 +2813,20 @@ def _render_real_estate_v2_builder() -> None:
     ])
 
     with tab_account:
+        if st.session_state.pop("re_v2_account_form_reset_pending", False):
+            defaults = {
+                "re_v2_account_subgroup": "building_admin",
+                "re_v2_user_email": "",
+                "re_v2_user_first_name": "",
+                "re_v2_user_last_name": "",
+                "re_v2_user_display_name": "",
+                "re_v2_user_phone": "",
+                "re_v2_user_lang": "en",
+                "re_v2_user_enterprise_select": "Standalone / no enterprise",
+                "re_v2_user_asset_select": "No asset linked",
+            }
+            for key, value in defaults.items():
+                st.session_state[key] = value
         enterprises = list_re_v2_enterprises()
         enterprise_rows_by_id = {row["enterprise_id"]: row for row in enterprises}
         enterprise_options = {"Standalone / no enterprise": ""}
