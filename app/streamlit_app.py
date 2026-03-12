@@ -61,6 +61,16 @@ from common.services.real_estate_sqlite import (
     load_real_estate_snapshot,
 )
 from common.services.real_estate_ai_review import review_real_estate_certification
+from common.services.real_estate_v2_store import (
+    create_re_v2_account,
+    create_re_v2_asset,
+    create_re_v2_enterprise,
+    create_re_v2_visit,
+    get_re_v2_summary,
+    list_re_v2_accounts,
+    list_re_v2_assets,
+    list_re_v2_visits,
+)
 from common.services.telegram_connector import (
     get_telegram_connector_status,
     send_controlled_test_message,
@@ -2712,10 +2722,11 @@ def render_real_estate_vertical() -> None:
     admin_tab, user_tab, enterprise_tab = st.tabs(["Admin", "User", "Enterprise"])
 
     with admin_tab:
-        tab_overview, tab_workspace, tab_a, tab_b, tab_c = st.tabs(
+        tab_overview, tab_workspace, tab_v2, tab_a, tab_b, tab_c = st.tabs(
             [
                 "Overview",
                 "Workspace",
+                "V2 Builder",
                 "Legacy A",
                 "Legacy B",
                 "Legacy C",
@@ -2725,6 +2736,8 @@ def render_real_estate_vertical() -> None:
             _render_real_estate_overview(snapshot, context, readiness)
         with tab_workspace:
             _render_real_estate_workspace(snapshot, context, workspace, readiness, cfg)
+        with tab_v2:
+            _render_real_estate_v2_builder()
         with tab_a:
             _render_legacy_panel_a(context)
         with tab_b:
@@ -2737,6 +2750,159 @@ def render_real_estate_vertical() -> None:
 
     with enterprise_tab:
         _render_real_estate_enterprise_avatar(snapshot, context, workspace, readiness)
+
+
+def _render_real_estate_v2_builder() -> None:
+    summary = get_re_v2_summary()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("ACCOUNTS", summary["accounts"])
+    c2.metric("ENTERPRISES", summary["enterprises"])
+    c3.metric("ASSETS", summary["assets"])
+    c4.metric("VISITS", summary["visits"])
+
+    subgroup_counts = summary.get("subgroups", {})
+    st.dataframe([
+        {"SUBGROUP": "building_admin", "ACCOUNTS": subgroup_counts.get("building_admin", 0)},
+        {"SUBGROUP": "property_manager", "ACCOUNTS": subgroup_counts.get("property_manager", 0)},
+    ], use_container_width=True, hide_index=True)
+
+    tab_account, tab_enterprise, tab_asset, tab_visit, tab_recent = st.tabs([
+        "Account", "Enterprise", "Asset", "Visit", "Recent"
+    ])
+
+    with tab_account:
+        subgroup = st.selectbox("Subgroup", ["building_admin", "property_manager"], key="re_v2_account_subgroup")
+        col1, col2 = st.columns(2)
+        with col1:
+            user_email = st.text_input("User email", key="re_v2_user_email")
+            user_phone = st.text_input("User phone (optional)", key="re_v2_user_phone")
+            preferred_language = st.selectbox("Preferred language", ["en", "es"], key="re_v2_user_lang")
+        with col2:
+            enterprise_id = st.text_input("Enterprise id (optional)", key="re_v2_user_enterprise")
+            if subgroup == "building_admin":
+                scope_field = st.text_input("Community name", key="re_v2_ba_community")
+                ref_field = st.text_input("Community reference code", key="re_v2_ba_ref")
+            else:
+                scope_field = st.text_input("Portfolio segment", key="re_v2_pm_segment")
+                ref_field = st.text_input("Property reference code", key="re_v2_pm_ref")
+        if st.button("Create account", type="primary", key="re_v2_create_account"):
+            if not user_email.strip():
+                st.warning("User email is required.")
+            else:
+                profile_data = {"scope_field": scope_field.strip(), "reference_code": ref_field.strip()}
+                account_id = create_re_v2_account(
+                    user_email=user_email,
+                    user_phone=user_phone,
+                    user_role="operator",
+                    subgroup=subgroup,
+                    enterprise_id=enterprise_id,
+                    preferred_language=preferred_language,
+                    profile_data=profile_data,
+                )
+                st.success(f"Account created: {account_id}")
+                st.rerun()
+
+    with tab_enterprise:
+        col1, col2 = st.columns(2)
+        with col1:
+            enterprise_name = st.text_input("Enterprise name", key="re_v2_enterprise_name")
+            contact_email = st.text_input("Contact email", key="re_v2_enterprise_email")
+        with col2:
+            enterprise_type = st.text_input("Enterprise type", value="real_estate", key="re_v2_enterprise_type")
+            contact_phone = st.text_input("Contact phone", key="re_v2_enterprise_phone")
+        if st.button("Create enterprise", type="primary", key="re_v2_create_enterprise"):
+            if not enterprise_name.strip():
+                st.warning("Enterprise name is required.")
+            else:
+                enterprise_id = create_re_v2_enterprise(
+                    enterprise_name=enterprise_name,
+                    enterprise_type=enterprise_type,
+                    contact_email=contact_email,
+                    contact_phone=contact_phone,
+                    enterprise_data={},
+                )
+                st.success(f"Enterprise created: {enterprise_id}")
+                st.rerun()
+
+    with tab_asset:
+        subgroup = st.selectbox("Subgroup context", ["building_admin", "property_manager"], key="re_v2_asset_subgroup")
+        left, right = st.columns(2)
+        with left:
+            enterprise_id = st.text_input("Enterprise id", key="re_v2_asset_enterprise")
+            asset_public_id = st.text_input("Asset public id", key="re_v2_asset_public")
+            asset_name = st.text_input("Asset name", key="re_v2_asset_name")
+            asset_type = st.text_input("Asset type", value="residential", key="re_v2_asset_type")
+        with right:
+            address_line = st.text_input("Address line", key="re_v2_asset_address")
+            city = st.text_input("City", key="re_v2_asset_city")
+            province = st.text_input("Province", key="re_v2_asset_province")
+            postal_code = st.text_input("Postal code", key="re_v2_asset_postal")
+        if subgroup == "building_admin":
+            extra_a, extra_b = st.columns(2)
+            with extra_a:
+                community_name = st.text_input("Community name", key="re_v2_asset_community")
+            with extra_b:
+                building_block = st.text_input("Building block", key="re_v2_asset_block")
+            asset_data = {"community_name": community_name.strip(), "building_block": building_block.strip()}
+        else:
+            extra_a, extra_b = st.columns(2)
+            with extra_a:
+                occupancy_status = st.text_input("Occupancy status", key="re_v2_asset_occupancy")
+            with extra_b:
+                portfolio_segment = st.text_input("Portfolio segment", key="re_v2_asset_segment")
+            asset_data = {"occupancy_status": occupancy_status.strip(), "portfolio_segment": portfolio_segment.strip()}
+        if st.button("Create asset", type="primary", key="re_v2_create_asset"):
+            required = [enterprise_id.strip(), asset_public_id.strip(), asset_name.strip()]
+            if not all(required):
+                st.warning("Enterprise id, asset public id and asset name are required.")
+            else:
+                asset_id = create_re_v2_asset(
+                    enterprise_id=enterprise_id,
+                    asset_public_id=asset_public_id,
+                    asset_type=asset_type,
+                    asset_name=asset_name,
+                    address_line=address_line,
+                    city=city,
+                    province=province,
+                    postal_code=postal_code,
+                    country="ES",
+                    asset_data=asset_data,
+                )
+                st.success(f"Asset created: {asset_id}")
+                st.rerun()
+
+    with tab_visit:
+        left, right = st.columns(2)
+        with left:
+            asset_id = st.text_input("Asset id", key="re_v2_visit_asset")
+            created_by_account_id = st.text_input("Created by account id", key="re_v2_visit_account")
+        with right:
+            visit_date_utc = st.text_input("Visit date UTC", value="", placeholder="2026-03-12T10:00:00Z", key="re_v2_visit_date")
+            workflow_note = st.text_input("Workflow note", key="re_v2_visit_note")
+        if st.button("Create visit", type="primary", key="re_v2_create_visit"):
+            if not asset_id.strip():
+                st.warning("Asset id is required.")
+            else:
+                visit_id = create_re_v2_visit(
+                    asset_id=asset_id,
+                    created_by_account_id=created_by_account_id,
+                    visit_date_utc=visit_date_utc,
+                    visit_data={"workflow_note": workflow_note.strip()},
+                )
+                st.success(f"Visit created: {visit_id}")
+                st.rerun()
+
+    with tab_recent:
+        left, mid, right = st.columns(3)
+        with left:
+            _render_panel_section_title("Recent accounts")
+            st.dataframe(list_re_v2_accounts(), use_container_width=True, hide_index=True)
+        with mid:
+            _render_panel_section_title("Recent assets")
+            st.dataframe(list_re_v2_assets(), use_container_width=True, hide_index=True)
+        with right:
+            _render_panel_section_title("Recent visits")
+            st.dataframe(list_re_v2_visits(), use_container_width=True, hide_index=True)
 
 
 def _count_sqlite_rows(db_path: Path, table_name: str) -> int:
