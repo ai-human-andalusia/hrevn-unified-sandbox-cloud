@@ -78,6 +78,22 @@ AGENT_OPERATIONS_SQLITE_PATH = APP_DATA_DIR / "agent_operations" / "hrevn_agent_
 AUTH_ACCESS_SQLITE_PATH = APP_DATA_DIR / "auth" / "hrevn_auth_access.db"
 
 
+def _render_console_table_html(df: pd.DataFrame, *, total_row_index: int | None = None) -> None:
+    styled = df.style.set_table_styles([
+        {"selector": "table", "props": [("width", "100%"), ("border-collapse", "collapse"), ("table-layout", "fixed"), ("font-family", "Menlo, Monaco, monospace"), ("font-size", "12px")]},
+        {"selector": "th", "props": [("background-color", "#e8edf2"), ("color", "#0f172a"), ("font-size", "11px"), ("font-weight", "700"), ("text-transform", "uppercase"), ("letter-spacing", "0.08em"), ("padding", "8px 10px"), ("border", "1px solid #d8e1e8"), ("text-align", "left")]},
+        {"selector": "td", "props": [("padding", "8px 10px"), ("border", "1px solid #d8e1e8"), ("color", "#0f172a"), ("background-color", "#ffffff")]},
+    ])
+    if "VERTICAL" in df.columns:
+        styled = styled.set_properties(subset=["VERTICAL"], **{"background-color": "#edf2f7", "font-weight": "700", "text-transform": "uppercase", "width": "140px"})
+    if "LINE" in df.columns:
+        styled = styled.set_properties(subset=["LINE"], **{"width": "220px"})
+    if total_row_index is not None:
+        styled = styled.apply(lambda row: ["background-color:#dbe7f0;font-weight:700;" if row.name == total_row_index else "" for _ in row], axis=1)
+    html = styled.hide(axis="index").to_html()
+    st.markdown(html, unsafe_allow_html=True)
+
+
 @dataclass
 class ValidationResult:
     file_name: str
@@ -1515,12 +1531,19 @@ def render_central_console() -> None:
         zip_downloads = 0
 
         production_rows = [
-            {"VERTICAL": "REAL ESTATE", "LINE": "Administradores de fincas", "EVENTS / VISITS": total_visits, "IN REVIEW": review_visits, "CERTIFICATES": certificates_emitted, "ZIPS": zips_emitted, "EMAILS": emails_emitted, "VERIFY": verify_clicks, "ZIP DOWNLOADS": zip_downloads},
-            {"VERTICAL": "REAL ESTATE", "LINE": "Property Manager", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
-            {"VERTICAL": "REAL ESTATE", "LINE": "Family Office", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
-            {"VERTICAL": "REAL ESTATE", "LINE": "Fondos de inversión", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
-            {"VERTICAL": "ADMINISTRATION", "LINE": "Fotovoltaica", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0},
+            {"VERTICAL": "REAL ESTATE", "LINE": "Administradores de fincas", "EVENTS / VISITS": total_visits, "IN REVIEW": review_visits, "CERTIFICATES": certificates_emitted, "ZIPS": zips_emitted, "EMAILS": emails_emitted, "VERIFY": verify_clicks, "ZIP DOWNLOADS": zip_downloads, "FACTURATION": 0},
+            {"VERTICAL": "REAL ESTATE", "LINE": "Property Manager", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0, "FACTURATION": 0},
+            {"VERTICAL": "REAL ESTATE", "LINE": "Family Office", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0, "FACTURATION": 0},
+            {"VERTICAL": "REAL ESTATE", "LINE": "Fondos de inversión", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0, "FACTURATION": 0},
+            {"VERTICAL": "ADMINISTRATION", "LINE": "Fotovoltaica", "EVENTS / VISITS": 0, "IN REVIEW": 0, "CERTIFICATES": 0, "ZIPS": 0, "EMAILS": 0, "VERIFY": 0, "ZIP DOWNLOADS": 0, "FACTURATION": 0},
         ]
+
+        prod_df = pd.DataFrame(production_rows)
+        prod_total = {"VERTICAL": "TOTAL", "LINE": "TOTAL"}
+        for col in prod_df.columns:
+            if col not in {"VERTICAL", "LINE"}:
+                prod_total[col] = int(prod_df[col].sum())
+        prod_df = pd.concat([prod_df, pd.DataFrame([prod_total])], ignore_index=True)
 
         agent_records = agent_snapshot.records
         agent_rows = [
@@ -1535,28 +1558,15 @@ def render_central_console() -> None:
                 "SIGNED": len([row for row in agent_records if (row.get("status") or "") == "executed_sealed"]),
             }
         ]
-
-        prod_df = pd.DataFrame(production_rows)
         agent_df = pd.DataFrame(agent_rows)
+        agent_total = {"VERTICAL": "TOTAL", "LINE": "TOTAL"}
+        for col in agent_df.columns:
+            if col not in {"VERTICAL", "LINE"}:
+                agent_total[col] = int(agent_df[col].sum())
+        agent_df = pd.concat([agent_df, pd.DataFrame([agent_total])], ignore_index=True)
 
-        header_styles = [
-            {"selector": "th", "props": [("background-color", "#e8edf2"), ("color", "#0f172a"), ("font-size", "11px"), ("font-weight", "700"), ("text-transform", "uppercase"), ("letter-spacing", "0.08em")]},
-            {"selector": "td", "props": [("font-size", "12px"), ("font-family", "Menlo, Monaco, monospace")]},
-        ]
-
-        prod_styler = (
-            prod_df.style
-            .set_table_styles(header_styles)
-            .set_properties(subset=["VERTICAL"], **{"background-color": "#edf2f7", "font-weight": "700", "text-transform": "uppercase"})
-        )
-        agent_styler = (
-            agent_df.style
-            .set_table_styles(header_styles)
-            .set_properties(subset=["VERTICAL"], **{"background-color": "#edf2f7", "font-weight": "700", "text-transform": "uppercase"})
-        )
-
-        st.dataframe(prod_styler, use_container_width=True, hide_index=True)
-        st.dataframe(agent_styler, use_container_width=True, hide_index=True)
+        _render_console_table_html(prod_df, total_row_index=len(prod_df) - 1)
+        _render_console_table_html(agent_df, total_row_index=len(agent_df) - 1)
 
     with technical_tab:
         render_dry_run_dashboard()
@@ -2471,15 +2481,8 @@ def main() -> None:
     _render_global_table_style()
     _render_auth_shell()
 
-    head_left, head_right = st.columns([0.84, 0.16])
-    with head_left:
-        st.title("HREVN UNIFIED V1 SANDBOX — Streamlit Panels")
-        st.caption(
-            "Documentary-only UI. No real source access, no SQLite writes, no real data reads outside the bundled sandbox snapshot."
-        )
-    with head_right:
-        st.write("")
-        st.write("")
+    top_right = st.columns([0.84, 0.16])[1]
+    with top_right:
         if st.button("Log out", use_container_width=True):
             _logout()
             st.rerun()
