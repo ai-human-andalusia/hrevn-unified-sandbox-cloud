@@ -1623,8 +1623,7 @@ def render_central_console() -> None:
 
         email_rows = [
             {
-                "VERTICAL": "COMMUNICATIONS",
-                "LINE": "Email",
+                "VERTICAL": "EMAIL",
                 "NEW": 0,
                 "SENT": 0,
                 "SUPPORT TICKETS": 0,
@@ -1633,9 +1632,9 @@ def render_central_console() -> None:
             }
         ]
         email_df = pd.DataFrame(email_rows)
-        email_total = {"VERTICAL": "TOTAL", "LINE": "TOTAL"}
+        email_total = {"VERTICAL": "TOTAL"}
         for col in email_df.columns:
-            if col not in {"VERTICAL", "LINE"}:
+            if col != "VERTICAL":
                 email_total[col] = int(email_df[col].sum())
         email_df = pd.concat([email_df, pd.DataFrame([email_total])], ignore_index=True)
 
