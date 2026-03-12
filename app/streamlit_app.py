@@ -713,44 +713,36 @@ def render_controlled_actions_vertical() -> None:
     records = list(snapshot.records)
     records.sort(key=lambda item: (item["status"] != "pending_review", -int(item.get("risk_rank") or 0), item["record_id"]))
 
-    metric_1, metric_2, metric_3, metric_4 = st.columns(4)
-    metric_1.metric("Records", len(records))
-    metric_2.metric("Pending review", sum(1 for item in records if item["status"] == "pending_review"))
-    metric_3.metric("Approved", sum(1 for item in records if item["human_action"] == "approved"))
-    metric_4.metric("Rejected", sum(1 for item in records if item["human_action"] == "rejected"))
+    left, right = st.columns([1.0, 2.0])
 
-    list_col, detail_col = st.columns([1.05, 1.95])
-
-    with list_col:
-        st.markdown("### Recent records")
+    with left:
+        st.markdown("### Records")
         table_rows = [
             {
                 "Record": item["record_id"],
                 "Agent": item["agent_name"],
-                "Operation": item["intent"],
                 "Risk": item["risk_level"],
                 "Status": _controlled_actions_status_label(item["status"]),
             }
             for item in records
         ]
         st.dataframe(table_rows, use_container_width=True, hide_index=True)
-        labels = [f"{item['record_id']} | {_controlled_actions_status_label(item['status'])} | {item['intent']}" for item in records]
-        selected_label = st.radio("Select operation record", labels, key="controlled_actions_selected")
+        labels = [f"{item['record_id']} | {_controlled_actions_status_label(item['status'])}" for item in records]
+        selected_label = st.radio("Select record", labels, key="controlled_actions_selected")
         selected_id = selected_label.split(" | ")[0]
         selected = next(item for item in records if item["record_id"] == selected_id)
 
-    with detail_col:
-        st.markdown("### Regulated operation review record")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Risk level", selected["risk_level"])
-        c2.metric("Approval policy", selected["approval_policy"])
-        c3.metric("Current status", _controlled_actions_status_label(selected["status"]))
+    with right:
+        top_a, top_b, top_c = st.columns(3)
+        top_a.metric("Risk level", selected["risk_level"])
+        top_b.metric("Approval policy", selected["approval_policy"])
+        top_c.metric("Status", _controlled_actions_status_label(selected["status"]))
 
-        st.markdown("### Why regulatory review is required")
+        st.markdown("### Review summary")
         st.info(selected["review_reason"])
 
-        block_a, block_b = st.columns([1.1, 0.9])
-        with block_a:
+        summary_col, auth_col = st.columns([1.15, 0.85])
+        with summary_col:
             st.markdown("### Proposed operation")
             st.dataframe(
                 [
@@ -764,44 +756,42 @@ def render_controlled_actions_vertical() -> None:
                 use_container_width=True,
                 hide_index=True,
             )
-            st.markdown("#### Operation parameters")
+            st.markdown("### Operation parameters")
             st.dataframe(
                 [{"Parameter": row["field"], "Value": row["value"], "Type": row["type"]} for row in selected["parameters"]],
                 use_container_width=True,
                 hide_index=True,
             )
-        with block_b:
+
+        with auth_col:
             st.markdown("### Human authorization")
             decision_rows = [
-                {"Control": "Human authorization", "State": selected["human_action"].replace("_", " ").title()},
-                {"Control": "Recommended for execution", "State": "Yes" if selected["recommended_for_execution"] else "No"},
-                {"Control": "Regulated review path", "State": "Required"},
+                {"Control": "Decision", "State": selected["human_action"].replace("_", " ").title()},
+                {"Control": "Recommended", "State": "Yes" if selected["recommended_for_execution"] else "No"},
                 {"Control": "Seal status", "State": selected["seal_status"].replace("_", " ").title()},
             ]
             st.dataframe(decision_rows, use_container_width=True, hide_index=True)
             if selected["status"] == "pending_review":
-                btn1, btn2 = st.columns(2)
-                with btn1:
-                    if st.button("Authorize and execute", type="primary", use_container_width=True, key=f"approve_{selected_id}"):
-                        set_agent_operation_decision(AGENT_OPERATIONS_SQLITE_PATH, selected_id, "approved")
-                        st.rerun()
-                with btn2:
-                    if st.button("Reject", use_container_width=True, key=f"reject_{selected_id}"):
-                        set_agent_operation_decision(AGENT_OPERATIONS_SQLITE_PATH, selected_id, "rejected")
-                        st.rerun()
+                if st.button("Authorize and execute", type="primary", use_container_width=True, key=f"approve_{selected_id}"):
+                    set_agent_operation_decision(AGENT_OPERATIONS_SQLITE_PATH, selected_id, "approved")
+                    st.rerun()
+                if st.button("Reject", use_container_width=True, key=f"reject_{selected_id}"):
+                    set_agent_operation_decision(AGENT_OPERATIONS_SQLITE_PATH, selected_id, "rejected")
+                    st.rerun()
             elif selected["status"] == "executed_sealed":
                 st.success("Operation authorized, executed and sealed.")
             else:
                 st.error("Operation rejected. Rejection record sealed.")
 
-        st.markdown("### Execution record and verification seal")
-        seal_rows = [
-            {"Field": "Seal reference", "Value": selected["seal_reference"] or "Pending decision"},
-            {"Field": "Export package", "Value": "Ready" if selected["status"] != "pending_review" else "Waiting for human decision"},
-            {"Field": "Record type", "Value": "Regulated AI operation review record"},
-            {"Field": "Storage source", "Value": "SQLite demo snapshot"},
-        ]
-        st.dataframe(seal_rows, use_container_width=True, hide_index=True)
+        st.markdown("### Verification seal")
+        st.dataframe(
+            [
+                {"Field": "Seal reference", "Value": selected["seal_reference"] or "Pending decision"},
+                {"Field": "Export package", "Value": "Ready" if selected["status"] != "pending_review" else "Waiting for human decision"},
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
         if selected["status"] != "pending_review":
             export_text = "\n".join([
