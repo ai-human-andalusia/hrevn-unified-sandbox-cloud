@@ -3528,10 +3528,6 @@ def main() -> None:
         render_real_estate_vertical()
     with tab_actions:
         render_controlled_actions_vertical()
-    with tab_schema:
-        render_schema_explorer()
-    with tab_mapping:
-        render_mapping_validator()
     with tab_arquitectura_status:
         render_dry_run_dashboard()
 
