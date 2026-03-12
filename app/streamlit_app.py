@@ -2335,43 +2335,96 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
 
 
 def _render_rwa_placeholder() -> None:
+    mode_key = "rwa_mode"
+    asset_key = "rwa_asset"
+    asset_selectbox_key = "rwa_asset_selectbox"
+    visit_draft_key = "rwa_visit_draft_id"
+    observation_draft_key = "rwa_observation_draft_id"
+
+    if mode_key not in st.session_state:
+        st.session_state[mode_key] = "new_visit"
+    if asset_key not in st.session_state:
+        st.session_state[asset_key] = ""
+    if visit_draft_key not in st.session_state:
+        st.session_state[visit_draft_key] = ""
+    if observation_draft_key not in st.session_state:
+        st.session_state[observation_draft_key] = ""
+
+    asset_labels = ["Select asset"]
+
     left, right = st.columns(2)
     with left:
-        st.markdown("#### Ficha de observación")
-        st.info("RWA workspace pending data model and SQLite foundation.")
+        action_left, action_right = st.columns(2)
+        if action_left.button("Nueva visita", key="rwa_new_visit", use_container_width=True):
+            st.session_state[mode_key] = "new_visit"
+            st.session_state[asset_key] = ""
+            st.session_state[visit_draft_key] = ""
+            st.session_state[observation_draft_key] = ""
+            st.session_state[asset_selectbox_key] = asset_labels[0]
+            st.rerun()
+        if action_right.button("Nueva observación", key="rwa_new_observation", use_container_width=True):
+            st.session_state[mode_key] = "new_observation"
+            if st.session_state.get(visit_draft_key):
+                st.session_state[observation_draft_key] = f"ROB-DRAFT-{st.session_state.get(visit_draft_key)}-001"
+            st.rerun()
+
+        field_a, field_b = st.columns(2)
+        with field_a:
+            st.selectbox(
+                "Asset",
+                asset_labels,
+                index=0,
+                key=asset_selectbox_key,
+                disabled=True,
+            )
+        with field_b:
+            st.text_input("Número de visita", value=st.session_state.get(visit_draft_key, ""), disabled=True)
+
+        observation_display = st.session_state.get(observation_draft_key, "") if st.session_state.get(mode_key) == "new_observation" else ""
+        st.text_input("Número de observación", value=observation_display, disabled=True)
         st.selectbox(
-            "Observation record",
-            options=["No records yet"],
+            "LPI code (official)",
+            options=[""],
             index=0,
             disabled=True,
-            key="rwa_placeholder_observation",
+            key="rwa_lpi",
         )
+        st.selectbox(
+            "Severity (0-5)",
+            options=[0, 1, 2, 3, 4, 5],
+            index=0,
+            disabled=True,
+            key="rwa_severity",
+        )
+        st.info("RWA data model pending. This form is now reserved for the future RWA SQLite flow.")
         st.text_area(
             "Description",
             value="",
             height=140,
             disabled=True,
-            key="rwa_placeholder_description",
+            key="rwa_description",
         )
         st.text_area(
             "Coordinator notes",
             value="",
             height=120,
             disabled=True,
-            key="rwa_placeholder_notes",
+            key="rwa_notes",
         )
+
     with right:
         st.markdown("#### Photos for current visit")
-        st.info("No RWA evidence loaded yet.")
         st.metric("Registered photos", 0)
+        st.info("No RWA photos registered yet.")
+        st.dataframe([], use_container_width=True)
         st.file_uploader(
-            "Upload photos",
+            "Upload photos (RWA preview)",
             type=["jpg", "jpeg", "png"],
             accept_multiple_files=True,
             disabled=True,
-            key="rwa_placeholder_uploader",
+            key="rwa_uploader",
         )
-        st.caption("This tab keeps the target layout only. RWA data and flows will be defined later.")
+        st.caption("This RWA panel now uses the Legacy A skeleton only as interface structure. Data and SQLite flow will be defined separately from Real Estate.")
 
 
 def _render_legacy_panel_b(context: dict) -> None:
