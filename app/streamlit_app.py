@@ -895,6 +895,13 @@ def render_controlled_actions_vertical() -> None:
             use_container_width=True,
             hide_index=True,
         )
+
+    rationale_key = f"agent_ops_rationale_{selected['record_id']}"
+    rationale = st.session_state.get(rationale_key, selected.get("decision_rationale") or "")
+    package_payload = build_agent_operation_aer_package(selected) if selected["status"] != "pending_review" else None
+
+    mid_left, mid_center, mid_right = st.columns([1.0, 1.0, 1.0])
+    with mid_left:
         _render_panel_section_title("Operation Parameters")
         st.dataframe(
             [{"PARAMETER": row["field"], "VALUE": row["value"], "TYPE": row["type"]} for row in selected["parameters"]],
@@ -902,14 +909,7 @@ def render_controlled_actions_vertical() -> None:
             hide_index=True,
         )
 
-    rationale_key = f"agent_ops_rationale_{selected['record_id']}"
-    rationale = st.session_state.get(rationale_key, selected.get("decision_rationale") or "")
-    package_payload = build_agent_operation_aer_package(selected) if selected["status"] != "pending_review" else None
-
-    package_payload = build_agent_operation_aer_package(selected) if selected["status"] != "pending_review" else None
-
-    mid_left, mid_right = st.columns([1.0, 1.0])
-    with mid_left:
+    with mid_center:
         _render_panel_section_title("Human Authorization")
         st.dataframe(
             [
