@@ -113,6 +113,35 @@ def list_re_v2_account_asset_links(db_path: Path | None = None) -> list[dict]:
         ).fetchall()
         return [dict(row) for row in rows]
 
+def list_re_v2_asset_demands_rows(db_path: Path | None = None) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+              l.link_id,
+              e.enterprise_id,
+              e.enterprise_name,
+              a.account_id,
+              a.user_email AS property_or_user,
+              COALESCE(json_extract(a.profile_data_json, '$.reference_code'), '') AS user_reference,
+              s.asset_id,
+              s.asset_name,
+              s.asset_public_id,
+              l.assignment_role,
+              COUNT(DISTINCT v.visit_id) AS event_visit_count,
+              COUNT(DISTINCT i.issuance_id) AS certificate_count
+            FROM re_account_asset_links l
+            JOIN re_accounts a ON a.account_id = l.account_id
+            JOIN re_assets s ON s.asset_id = l.asset_id
+            LEFT JOIN re_enterprises e ON e.enterprise_id = a.enterprise_id
+            LEFT JOIN re_visits v ON v.asset_id = s.asset_id
+            LEFT JOIN re_issuances i ON i.asset_id = s.asset_id AND i.certificate_status = 'issued'
+            GROUP BY l.link_id, e.enterprise_id, e.enterprise_name, a.account_id, a.user_email, user_reference, s.asset_id, s.asset_name, s.asset_public_id, l.assignment_role
+            ORDER BY e.enterprise_name ASC, a.user_email ASC, s.asset_public_id ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
 
 def list_re_v2_visits(db_path: Path | None = None) -> list[dict]:
     with _connect(db_path) as conn:

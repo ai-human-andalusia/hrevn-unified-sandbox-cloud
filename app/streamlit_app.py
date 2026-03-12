@@ -66,8 +66,8 @@ from common.services.real_estate_v2_store import (
     create_re_v2_enterprise,
     get_re_v2_enterprise_assignment_detail,
     get_re_v2_summary,
-    list_re_v2_account_asset_links,
     list_re_v2_accounts,
+    list_re_v2_asset_demands_rows,
     list_re_v2_assets,
     list_re_v2_enterprises,
     list_re_v2_visits,
@@ -2849,7 +2849,7 @@ def _render_real_estate_v2_builder() -> None:
 
     with tab_recent:
         t_enterprises, t_accounts, t_assets, t_links, t_visits = st.tabs([
-            "Enterprises", "Accounts", "Assets", "Assignments", "Visits"
+            "Enterprises", "Accounts", "Assets", "Asset Demands", "Visits"
         ])
         with t_enterprises:
             enterprise_rows = list_re_v2_enterprises()
@@ -2908,8 +2908,114 @@ def _render_real_estate_v2_builder() -> None:
                 filtered_asset_rows = asset_rows
             st.dataframe(filtered_asset_rows, use_container_width=True, hide_index=True)
         with t_links:
-            _render_panel_section_title("User to asset assignments")
-            st.dataframe(list_re_v2_account_asset_links(), use_container_width=True, hide_index=True)
+            demand_rows = list_re_v2_asset_demands_rows()
+            demand_query = st.text_input(
+                "Search asset demands",
+                key="re_v2_asset_demands_search",
+                label_visibility="collapsed",
+                placeholder="Search by enterprise, user, reference, asset or public id",
+            ).strip().lower()
+            if demand_query:
+                filtered_demand_rows = [
+                    row for row in demand_rows
+                    if demand_query in str(row.get("enterprise_name", "")).lower()
+                    or demand_query in str(row.get("property_or_user", "")).lower()
+                    or demand_query in str(row.get("user_reference", "")).lower()
+                    or demand_query in str(row.get("asset_name", "")).lower()
+                    or demand_query in str(row.get("asset_public_id", "")).lower()
+                ]
+            else:
+                filtered_demand_rows = demand_rows
+
+            selected_link_id = st.session_state.get("re_v2_asset_demand_selected_link_id")
+            table_rows = []
+            for row in filtered_demand_rows:
+                table_rows.append({
+                    "OPEN": row.get("link_id") == selected_link_id,
+                    "ENTERPRISE": row.get("enterprise_name", ""),
+                    "PROPERTY / USER": row.get("property_or_user", ""),
+                    "USER REF": row.get("user_reference", ""),
+                    "ASSET": row.get("asset_name", ""),
+                    "ASSET REF": row.get("asset_public_id", ""),
+                    "EVENTS": int(row.get("event_visit_count") or 0),
+                    "CERTIFICATES": int(row.get("certificate_count") or 0),
+                    "_LINK_ID": row.get("link_id"),
+                })
+
+            if table_rows:
+                editor_df = pd.DataFrame(table_rows)
+                edited_df = st.data_editor(
+                    editor_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    key="re_v2_asset_demands_editor",
+                    column_config={
+                        "OPEN": st.column_config.CheckboxColumn(required=False),
+                        "_LINK_ID": None,
+                    },
+                    disabled=["ENTERPRISE", "PROPERTY / USER", "USER REF", "ASSET", "ASSET REF", "EVENTS", "CERTIFICATES", "_LINK_ID"],
+                )
+                open_rows = edited_df[edited_df["OPEN"] == True]
+                if not open_rows.empty:
+                    chosen_link_id = str(open_rows.iloc[-1]["_LINK_ID"])
+                    if chosen_link_id != selected_link_id:
+                        st.session_state["re_v2_asset_demand_selected_link_id"] = chosen_link_id
+                        st.rerun()
+                elif selected_link_id and selected_link_id not in {row.get("link_id") for row in filtered_demand_rows}:
+                    st.session_state.pop("re_v2_asset_demand_selected_link_id", None)
+                    st.rerun()
+
+                selected_row = next((row for row in filtered_demand_rows if row.get("link_id") == st.session_state.get("re_v2_asset_demand_selected_link_id")), None)
+                if not selected_row:
+                    selected_row = filtered_demand_rows[0]
+                    st.session_state["re_v2_asset_demand_selected_link_id"] = selected_row.get("link_id")
+
+                if selected_row:
+                    enterprise_label = str(selected_row.get("enterprise_name") or "Enterprise")
+                    user_label = str(selected_row.get("property_or_user") or "User")
+                    user_ref = str(selected_row.get("user_reference") or "-")
+                    asset_label = str(selected_row.get("asset_name") or "Asset")
+                    asset_ref = str(selected_row.get("asset_public_id") or "-")
+                    visits = int(selected_row.get("event_visit_count") or 0)
+                    certs = int(selected_row.get("certificate_count") or 0)
+                    relationship_html = f"""
+                    <div style='width:100%;margin-top:14px;border:1px solid #d8e1e8;border-radius:14px;background:#ffffff;padding:16px;'>
+                      <div style='display:flex;flex-wrap:wrap;gap:14px;align-items:stretch;justify-content:space-between;'>
+                        <div style='flex:1 1 220px;min-width:220px;background:#dbeafe;border:1px solid #93c5fd;border-radius:12px;padding:14px;'>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#1e3a8a;'>Enterprise</div>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:18px;font-weight:700;color:#0f172a;margin-top:8px;'>{enterprise_label}</div>
+                        </div>
+                        <div style='flex:0 0 60px;display:flex;align-items:center;justify-content:center;font-size:26px;color:#64748b;'>→</div>
+                        <div style='flex:1 1 220px;min-width:220px;background:#dcfce7;border:1px solid #86efac;border-radius:12px;padding:14px;'>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#166534;'>Assigned user</div>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:16px;font-weight:700;color:#0f172a;margin-top:8px;'>{user_label}</div>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;margin-top:6px;'>Reference: {user_ref}</div>
+                        </div>
+                        <div style='flex:0 0 60px;display:flex;align-items:center;justify-content:center;font-size:26px;color:#64748b;'>→</div>
+                        <div style='flex:1 1 240px;min-width:240px;background:#fef3c7;border:1px solid #fcd34d;border-radius:12px;padding:14px;'>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#92400e;'>Assigned asset</div>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:16px;font-weight:700;color:#0f172a;margin-top:8px;'>{asset_label}</div>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;margin-top:6px;'>Reference: {asset_ref}</div>
+                        </div>
+                        <div style='flex:1 1 200px;min-width:200px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:12px;padding:14px;'>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#334155;'>Operational summary</div>
+                          <div style='display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;'>
+                            <div style='flex:1 1 90px;background:#ffffff;border:1px solid #d8e1e8;border-radius:10px;padding:10px;'>
+                              <div style='font-family:Menlo,Monaco,monospace;font-size:11px;color:#475569;text-transform:uppercase;'>Events</div>
+                              <div style='font-family:Menlo,Monaco,monospace;font-size:22px;font-weight:700;color:#0f172a;'>{visits}</div>
+                            </div>
+                            <div style='flex:1 1 90px;background:#ffffff;border:1px solid #d8e1e8;border-radius:10px;padding:10px;'>
+                              <div style='font-family:Menlo,Monaco,monospace;font-size:11px;color:#475569;text-transform:uppercase;'>Certificates</div>
+                              <div style='font-family:Menlo,Monaco,monospace;font-size:22px;font-weight:700;color:#0f172a;'>{certs}</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    """
+                    st.markdown(relationship_html, unsafe_allow_html=True)
+            else:
+                st.dataframe([], use_container_width=True, hide_index=True)
         with t_visits:
             _render_panel_section_title("Recent visits")
             st.dataframe(list_re_v2_visits(), use_container_width=True, hide_index=True)
