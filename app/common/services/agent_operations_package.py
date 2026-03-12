@@ -82,6 +82,9 @@ def _build_report_pdf(record: dict[str, Any], operation_record: dict[str, Any], 
         y -= gap
 
     line("H-REVN AER — Verifiable Execution Record", 20, "Helvetica-Bold", 14)
+    line("Package Family: H-REVN AER", 14)
+    line("Bundle Profile: agent_operation_aer_v1", 14)
+    line("Verification Model: ROOT_AER_V1", 14)
     line(f"AER ID: {operation_record['aer_id']}")
     line(f"Record ID: {record['record_id']}")
     line(f"Workflow ID: {record['workflow_id']}")
@@ -166,6 +169,9 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
         {"artifact": "execution_record.json", "category": "core", "role": "execution_outcome_record"},
         {"artifact": "agent_operation_review_report.pdf", "category": "core", "role": "human_readable_review_report"},
         {"artifact": "manifest.json", "category": "control", "role": "package_manifest"},
+        {"artifact": "PROTOCOL_PROFILE.txt", "category": "support", "role": "package_profile_summary"},
+        {"artifact": "VERIFICATION.txt", "category": "support", "role": "verification_guidance_summary"},
+        {"artifact": "HOW_TO_VERIFY_THIS_AER_PACKAGE.txt", "category": "support", "role": "step_by_step_verification_guide"},
         {"artifact": "CHECKSUMS.sha256", "category": "verification", "role": "artifact_hash_list"},
         {"artifact": "ROOT_HASH_SHA256.txt", "category": "verification", "role": "package_root_hash"},
         {"artifact": "ROOT_SPEC_AER_V1.txt", "category": "verification", "role": "root_hash_rule"},
@@ -176,15 +182,36 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
         "generated_at_utc": packaged_at_utc,
         "workflow_id": operation_record["workflow_id"],
         "package_type": "agent_operation_aer_demo_v1",
+        "package_family": "hrevn_aer",
+        "bundle_profile": "agent_operation_aer_v1",
+        "verification_model": "ROOT_AER_V1",
+        "external_anchor_status": "not_anchored",
         "artifact_count": len(artifact_catalog),
         "artifacts": artifact_catalog,
-        "authoritative_files": [item["artifact"] for item in artifact_catalog],
+        "authoritative_files": [
+            "operation_record.json",
+            "approval_record.json",
+            "execution_record.json",
+            "agent_operation_review_report.pdf",
+            "manifest.json",
+            "CHECKSUMS.sha256",
+            "ROOT_HASH_SHA256.txt",
+            "ROOT_SPEC_AER_V1.txt",
+        ],
+        "supporting_files": [
+            "PROTOCOL_PROFILE.txt",
+            "VERIFICATION.txt",
+            "HOW_TO_VERIFY_THIS_AER_PACKAGE.txt",
+        ],
         "checksum_scope": [
             "operation_record.json",
             "approval_record.json",
             "execution_record.json",
             "agent_operation_review_report.pdf",
             "manifest.json",
+            "PROTOCOL_PROFILE.txt",
+            "VERIFICATION.txt",
+            "HOW_TO_VERIFY_THIS_AER_PACKAGE.txt",
             "ROOT_HASH_SHA256.txt",
             "ROOT_SPEC_AER_V1.txt",
         ],
@@ -215,6 +242,26 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
     artifacts["ROOT_SPEC_AER_V1.txt"] = (
         "ROOT = sha256(sorted filename:sha256 pairs for root_scope files listed in manifest)\n"
         "SERIALIZATION = UTF-8 text, '\\n' as line separator, no trailing newline after last line\n"
+    ).encode("utf-8")
+    artifacts["PROTOCOL_PROFILE.txt"] = (
+        "PACKAGE FAMILY = H-REVN AER\n"
+        "BUNDLE PROFILE = agent_operation_aer_v1\n"
+        "VERIFICATION MODEL = ROOT_AER_V1\n"
+        "CLASSIC H-REVN VISIT BUNDLE = not applicable\n"
+        "EXTERNAL ANCHOR STATUS = not_anchored\n"
+    ).encode("utf-8")
+    artifacts["VERIFICATION.txt"] = (
+        "This package is an H-REVN AER package, not a classic visit bundle.\n"
+        "Authoritative files are declared in manifest.json.\n"
+        "Verification follows CHECKSUMS.sha256 and ROOT_SPEC_AER_V1.txt.\n"
+        "No external blockchain anchor is included in this demo package.\n"
+    ).encode("utf-8")
+    artifacts["HOW_TO_VERIFY_THIS_AER_PACKAGE.txt"] = (
+        "1. Verify SHA-256 values listed in CHECKSUMS.sha256.\n"
+        "2. Open manifest.json and read root_scope.\n"
+        "3. Build UTF-8 lines as filename:sha256 sorted by filename.\n"
+        "4. Join lines with '\\n' and do not append a trailing newline.\n"
+        "5. SHA-256 that exact text and compare it with ROOT_HASH_SHA256.txt.\n"
     ).encode("utf-8")
 
     checksum_names = manifest["checksum_scope"]
