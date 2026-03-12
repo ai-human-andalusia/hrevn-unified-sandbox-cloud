@@ -21,10 +21,14 @@ from common.services.agent_operations_package import AERSigningConfig, build_age
 from common.services.auth_access_sqlite import (
     AuthRequestContext,
     create_auth_session,
+    get_account_status,
     get_recent_auth_snapshot,
     log_auth_event,
+    reactivate_account,
     revoke_auth_session,
+    set_account_status,
     touch_auth_session,
+    upsert_auth_account,
 )
 from common.services.agent_operations_sqlite import (
     load_agent_operations_snapshot,
@@ -217,6 +221,29 @@ def _load_auth_shell_config() -> AuthShellConfig:
     )
 
 
+def _sync_auth_accounts(cfg: AuthShellConfig) -> None:
+    if cfg.admin_email:
+        upsert_auth_account(
+            AUTH_ACCESS_SQLITE_PATH,
+            user_email=cfg.admin_email.strip().lower(),
+            user_role="admin",
+            account_source="streamlit_secrets",
+        )
+    if cfg.user_email:
+        upsert_auth_account(
+            AUTH_ACCESS_SQLITE_PATH,
+            user_email=cfg.user_email.strip().lower(),
+            user_role="operator",
+            account_source="streamlit_secrets",
+        )
+    upsert_auth_account(
+        AUTH_ACCESS_SQLITE_PATH,
+        user_email="demo@hrevn.local",
+        user_role="demo",
+        account_source="built_in_demo",
+    )
+
+
 def _load_aer_signing_config() -> AERSigningConfig:
     enabled = _secret_bool("HREVN_SIGNING_ENABLED", False)
     return AERSigningConfig(
@@ -281,6 +308,7 @@ def _logout() -> None:
 
 def _render_auth_shell() -> None:
     cfg = _load_auth_shell_config()
+    _sync_auth_accounts(cfg)
     _init_auth_state()
 
     if st.session_state.get("auth_logged_in"):
@@ -325,28 +353,42 @@ def _render_auth_shell() -> None:
                     matched = ("operator", cfg.user_email)
 
                 if matched:
-                    session_id = create_auth_session(
-                        AUTH_ACCESS_SQLITE_PATH,
-                        user_email=matched[1],
-                        user_role=matched[0],
-                        context=context,
-                    )
-                    log_auth_event(
-                        AUTH_ACCESS_SQLITE_PATH,
-                        user_email=matched[1],
-                        user_role=matched[0],
-                        identifier_attempted=email.strip().lower() or None,
-                        event_type="login_success",
-                        success_flag=True,
-                        failure_reason=None,
-                        context=context,
-                    )
-                    st.session_state["auth_logged_in"] = True
-                    st.session_state["auth_role"] = matched[0]
-                    st.session_state["auth_email"] = matched[1]
-                    st.session_state["auth_session_id"] = session_id
-                    st.success("Access granted.")
-                    st.rerun()
+                    account_status = get_account_status(AUTH_ACCESS_SQLITE_PATH, matched[1])
+                    if account_status != "active":
+                        log_auth_event(
+                            AUTH_ACCESS_SQLITE_PATH,
+                            user_email=matched[1],
+                            user_role=matched[0],
+                            identifier_attempted=email.strip().lower() or None,
+                            event_type="login_failure",
+                            success_flag=False,
+                            failure_reason=f"account_{account_status}",
+                            context=context,
+                        )
+                        st.error(f"Account is {account_status}. Access is blocked.")
+                    else:
+                        session_id = create_auth_session(
+                            AUTH_ACCESS_SQLITE_PATH,
+                            user_email=matched[1],
+                            user_role=matched[0],
+                            context=context,
+                        )
+                        log_auth_event(
+                            AUTH_ACCESS_SQLITE_PATH,
+                            user_email=matched[1],
+                            user_role=matched[0],
+                            identifier_attempted=email.strip().lower() or None,
+                            event_type="login_success",
+                            success_flag=True,
+                            failure_reason=None,
+                            context=context,
+                        )
+                        st.session_state["auth_logged_in"] = True
+                        st.session_state["auth_role"] = matched[0]
+                        st.session_state["auth_email"] = matched[1]
+                        st.session_state["auth_session_id"] = session_id
+                        st.success("Access granted.")
+                        st.rerun()
                 elif cfg.auth_enabled and cfg.has_configured_accounts:
                     log_auth_event(
                         AUTH_ACCESS_SQLITE_PATH,
@@ -365,27 +407,30 @@ def _render_auth_shell() -> None:
             if (not cfg.auth_enabled) or (not cfg.has_configured_accounts):
                 if st.button("Continue in documentary demo mode"):
                     context = _get_auth_request_context()
-                    session_id = create_auth_session(
-                        AUTH_ACCESS_SQLITE_PATH,
-                        user_email="demo@hrevn.local",
-                        user_role="demo",
-                        context=context,
-                    )
-                    log_auth_event(
-                        AUTH_ACCESS_SQLITE_PATH,
-                        user_email="demo@hrevn.local",
-                        user_role="demo",
-                        identifier_attempted="demo@hrevn.local",
-                        event_type="login_success_demo",
-                        success_flag=True,
-                        failure_reason=None,
-                        context=context,
-                    )
-                    st.session_state["auth_logged_in"] = True
-                    st.session_state["auth_role"] = "demo"
-                    st.session_state["auth_email"] = "demo@hrevn.local"
-                    st.session_state["auth_session_id"] = session_id
-                    st.rerun()
+                    if get_account_status(AUTH_ACCESS_SQLITE_PATH, "demo@hrevn.local") != "active":
+                        st.error("Demo access is currently blocked.")
+                    else:
+                        session_id = create_auth_session(
+                            AUTH_ACCESS_SQLITE_PATH,
+                            user_email="demo@hrevn.local",
+                            user_role="demo",
+                            context=context,
+                        )
+                        log_auth_event(
+                            AUTH_ACCESS_SQLITE_PATH,
+                            user_email="demo@hrevn.local",
+                            user_role="demo",
+                            identifier_attempted="demo@hrevn.local",
+                            event_type="login_success_demo",
+                            success_flag=True,
+                            failure_reason=None,
+                            context=context,
+                        )
+                        st.session_state["auth_logged_in"] = True
+                        st.session_state["auth_role"] = "demo"
+                        st.session_state["auth_email"] = "demo@hrevn.local"
+                        st.session_state["auth_session_id"] = session_id
+                        st.rerun()
         with right:
             st.markdown("#### Access status")
             status_rows = [
@@ -459,15 +504,19 @@ def render_access_security_panel() -> None:
     st.caption("Administrative visibility over access events and active authentication sessions in the unified sandbox.")
 
     snapshot = get_recent_auth_snapshot(AUTH_ACCESS_SQLITE_PATH, limit=50)
+    accounts = snapshot.get("accounts", [])
     events = snapshot.get("events", [])
     sessions = snapshot.get("sessions", [])
+    lifecycle = snapshot.get("lifecycle", [])
 
     total_events = len(events)
     login_success = sum(1 for row in events if row.get("event_type") in {"login_success", "login_success_demo"})
     login_failure = sum(1 for row in events if row.get("event_type") == "login_failure")
     active_sessions = sum(1 for row in sessions if row.get("session_state") == "active")
+    suspended_accounts = sum(1 for row in accounts if row.get("account_status") == "suspended")
+    closed_accounts = sum(1 for row in accounts if row.get("account_status") == "closed")
 
-    top_a, top_b, top_c, top_d = st.columns(4)
+    top_a, top_b, top_c, top_d, top_e, top_f = st.columns(6)
     with top_a:
         st.metric("Events tracked", total_events)
     with top_b:
@@ -476,8 +525,143 @@ def render_access_security_panel() -> None:
         st.metric("Login failure", login_failure)
     with top_d:
         st.metric("Active sessions", active_sessions)
+    with top_e:
+        st.metric("Suspended", suspended_accounts)
+    with top_f:
+        st.metric("Closed", closed_accounts)
 
-    tab_events, tab_sessions = st.tabs(["Access Events", "Active Sessions"])
+    tab_accounts, tab_events, tab_sessions, tab_lifecycle = st.tabs(["Accounts", "Access Events", "Active Sessions", "Lifecycle"])
+
+    with tab_accounts:
+        account_rows = [
+            {
+                "USER": row.get("user_email") or "-",
+                "ROLE": row.get("user_role") or "-",
+                "STATUS": row.get("account_status") or "-",
+                "SOURCE": row.get("account_source") or "-",
+                "SUSPENDED": row.get("suspended_at_utc") or "-",
+                "CLOSED": row.get("closed_at_utc") or "-",
+            }
+            for row in accounts
+        ]
+        if account_rows:
+            st.dataframe(account_rows, use_container_width=True, hide_index=True)
+
+            selectable_accounts = [row["USER"] for row in account_rows]
+            selected_account = st.selectbox("Account", selectable_accounts, key="auth_account_target")
+            account_row = next((row for row in accounts if (row.get("user_email") or "").lower() == selected_account.lower()), None) or {}
+
+            left, middle, right = st.columns([1, 1, 1.2])
+            with left:
+                st.markdown("##### Account")
+                st.dataframe(
+                    [{
+                        "USER": account_row.get("user_email") or "-",
+                        "ROLE": account_row.get("user_role") or "-",
+                        "STATUS": account_row.get("account_status") or "-",
+                    }],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            with middle:
+                st.markdown("##### Session impact")
+                impacted_sessions = [
+                    row for row in sessions
+                    if (row.get("user_email") or "").lower() == selected_account.lower() and row.get("session_state") == "active"
+                ]
+                st.dataframe(
+                    [{
+                        "ACTIVE SESSIONS": len(impacted_sessions),
+                        "ACTION": "revoked on suspend/close",
+                    }],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            with right:
+                st.markdown("##### Decision rationale")
+                action_reason = st.text_area(
+                    "Admin rationale",
+                    key=f"auth_admin_reason_{selected_account}",
+                    placeholder="Reason for suspend / close / reactivate",
+                    height=140,
+                )
+                current_status = str(account_row.get("account_status") or "active")
+                current_admin_email = (st.session_state.get("auth_email") or "").strip().lower()
+                is_self = selected_account.strip().lower() == current_admin_email
+                if is_self:
+                    st.warning("Self-suspend and self-close are blocked in the admin panel.")
+                button_a, button_b, button_c = st.columns(3)
+                context = _get_auth_request_context()
+                if button_a.button("Suspend", use_container_width=True, disabled=is_self or current_status == "closed"):
+                    set_account_status(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=selected_account,
+                        resulting_status="suspended",
+                        performed_by_user_email=st.session_state.get("auth_email"),
+                        performed_by_user_role=st.session_state.get("auth_role"),
+                        reason=(action_reason or "").strip() or None,
+                        context=context,
+                    )
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=selected_account,
+                        user_role=account_row.get("user_role"),
+                        identifier_attempted=selected_account,
+                        event_type="account_suspended",
+                        success_flag=True,
+                        failure_reason=None,
+                        context=context,
+                        details_json=json.dumps({"reason": (action_reason or "").strip() or None}),
+                    )
+                    st.success("Account suspended.")
+                    st.rerun()
+                if button_b.button("Close", use_container_width=True, disabled=is_self or current_status == "closed"):
+                    set_account_status(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=selected_account,
+                        resulting_status="closed",
+                        performed_by_user_email=st.session_state.get("auth_email"),
+                        performed_by_user_role=st.session_state.get("auth_role"),
+                        reason=(action_reason or "").strip() or None,
+                        context=context,
+                    )
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=selected_account,
+                        user_role=account_row.get("user_role"),
+                        identifier_attempted=selected_account,
+                        event_type="account_closed",
+                        success_flag=True,
+                        failure_reason=None,
+                        context=context,
+                        details_json=json.dumps({"reason": (action_reason or "").strip() or None}),
+                    )
+                    st.success("Account closed.")
+                    st.rerun()
+                if button_c.button("Reactivate", use_container_width=True, disabled=current_status == "active"):
+                    reactivate_account(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=selected_account,
+                        performed_by_user_email=st.session_state.get("auth_email"),
+                        performed_by_user_role=st.session_state.get("auth_role"),
+                        reason=(action_reason or "").strip() or None,
+                        context=context,
+                    )
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=selected_account,
+                        user_role=account_row.get("user_role"),
+                        identifier_attempted=selected_account,
+                        event_type="account_reactivated",
+                        success_flag=True,
+                        failure_reason=None,
+                        context=context,
+                        details_json=json.dumps({"reason": (action_reason or "").strip() or None}),
+                    )
+                    st.success("Account reactivated.")
+                    st.rerun()
+        else:
+            st.info("No accounts registered yet.")
 
     with tab_events:
         if not events:
@@ -516,6 +700,25 @@ def render_access_security_panel() -> None:
                 for row in sessions
             ]
             st.dataframe(session_rows, use_container_width=True, hide_index=True)
+
+    with tab_lifecycle:
+        if not lifecycle:
+            st.info("No account lifecycle changes recorded yet.")
+        else:
+            lifecycle_rows = [
+                {
+                    "WHEN": row.get("created_at_utc") or "-",
+                    "USER": row.get("user_email") or "-",
+                    "ROLE": row.get("user_role") or "-",
+                    "EVENT": row.get("event_type") or "-",
+                    "FROM": row.get("previous_status") or "-",
+                    "TO": row.get("resulting_status") or "-",
+                    "BY": row.get("performed_by_user_email") or "-",
+                    "REASON": row.get("reason") or "-",
+                }
+                for row in lifecycle
+            ]
+            st.dataframe(lifecycle_rows, use_container_width=True, hide_index=True)
 
 
 def _prepare_real_estate_context(snapshot, visit_id: str) -> dict:
