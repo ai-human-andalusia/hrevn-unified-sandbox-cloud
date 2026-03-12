@@ -894,9 +894,11 @@ def render_controlled_actions_vertical() -> None:
             hide_index=True,
         )
 
-    row_bottom_a, row_bottom_b, row_bottom_c = st.columns([0.92, 1.08, 1.0])
+    rationale_key = f"agent_ops_rationale_{selected['record_id']}"
+    rationale = st.session_state.get(rationale_key, selected.get("decision_rationale") or "")
     package_payload = build_agent_operation_aer_package(selected) if selected["status"] != "pending_review" else None
 
+    row_bottom_a, row_bottom_b = st.columns([0.95, 1.05])
     with row_bottom_a:
         _render_panel_section_title("Human Authorization")
         st.dataframe(
@@ -909,14 +911,6 @@ def render_controlled_actions_vertical() -> None:
             use_container_width=True,
             hide_index=True,
         )
-        rationale_key = f"agent_ops_rationale_{selected['record_id']}"
-        rationale = st.text_area(
-            "Decision rationale",
-            value=st.session_state.get(rationale_key, selected.get("decision_rationale") or ""),
-            key=rationale_key,
-            height=96,
-            placeholder="Add a brief rationale for approval or rejection.",
-        )
         reviewer_name = st.session_state.get("auth_email") or "admin@hrevn.local"
         reviewer_role = "Administrator" if st.session_state.get("auth_role") == "admin" else "Operator"
         if selected["status"] == "pending_review":
@@ -927,11 +921,12 @@ def render_controlled_actions_vertical() -> None:
                     "approved",
                     reviewer_name=reviewer_name,
                     reviewer_role=reviewer_role,
-                    rationale=rationale,
+                    rationale=st.session_state.get(rationale_key, ""),
                 )
                 st.rerun()
             if st.button("Reject", use_container_width=True, key=f"reject_{selected['record_id']}"):
-                if not rationale.strip():
+                current_rationale = st.session_state.get(rationale_key, "")
+                if not current_rationale.strip():
                     st.warning("Reject requires a short rationale.")
                 else:
                     set_agent_operation_decision(
@@ -940,7 +935,7 @@ def render_controlled_actions_vertical() -> None:
                         "rejected",
                         reviewer_name=reviewer_name,
                         reviewer_role=reviewer_role,
-                        rationale=rationale,
+                        rationale=current_rationale,
                     )
                     st.rerun()
         elif selected["status"] == "executed_sealed":
@@ -966,8 +961,36 @@ def render_controlled_actions_vertical() -> None:
             hide_index=True,
         )
 
-    with row_bottom_c:
+    exec_left, exec_mid, exec_right = st.columns([1.0, 1.45, 1.0])
+    with exec_left:
         _render_panel_section_title("Execution Record")
+        if package_payload is None:
+            st.dataframe(
+                [
+                    {"FIELD": "AER ID", "VALUE": f"AER-{selected['record_id']}"},
+                    {"FIELD": "Seal reference", "VALUE": "Pending decision"},
+                    {"FIELD": "Manifest hash", "VALUE": "Pending generation"},
+                    {"FIELD": "Root hash", "VALUE": "Pending generation"},
+                    {"FIELD": "ZIP package", "VALUE": "Pending generation"},
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.dataframe(
+                [
+                    {"FIELD": "AER ID", "VALUE": package_payload["aer_id"]},
+                    {"FIELD": "Seal reference", "VALUE": selected["seal_reference"] or "-"},
+                    {"FIELD": "Manifest hash", "VALUE": package_payload["manifest_hash"][:20] + "..."},
+                    {"FIELD": "Root hash", "VALUE": package_payload["root_hash"][:20] + "..."},
+                    {"FIELD": "ZIP package", "VALUE": package_payload["zip_filename"]},
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    with exec_mid:
+        _render_panel_section_title("Artifacts")
         if package_payload is None:
             pending_artifacts = [
                 "operation_record.json",
@@ -980,17 +1003,6 @@ def render_controlled_actions_vertical() -> None:
             ]
             st.dataframe(
                 [
-                    {"FIELD": "AER ID", "VALUE": f"AER-{selected['record_id']}"},
-                    {"FIELD": "Seal reference", "VALUE": "Pending decision"},
-                    {"FIELD": "Manifest hash", "VALUE": "Pending generation"},
-                    {"FIELD": "Root hash", "VALUE": "Pending generation"},
-                    {"FIELD": "ZIP package", "VALUE": "Pending generation"},
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-            st.dataframe(
-                [
                     {"ARTIFACT": name, "STATE": "Pending", "DETAIL": "Will be generated after approval or rejection"}
                     for name in pending_artifacts
                 ],
@@ -999,16 +1011,6 @@ def render_controlled_actions_vertical() -> None:
             )
             st.caption("AER package generation starts after approval or rejection.")
         else:
-            st.dataframe(
-                [
-                    {"FIELD": "AER ID", "VALUE": package_payload["aer_id"]},
-                    {"FIELD": "Seal reference", "VALUE": selected["seal_reference"] or "-"},
-                    {"FIELD": "Manifest hash", "VALUE": package_payload["manifest_hash"][:20] + "..."},
-                    {"FIELD": "Root hash", "VALUE": package_payload["root_hash"][:20] + "..."},
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
             st.dataframe(
                 [
                     {"ARTIFACT": row["artifact"], "SHA256": row["sha256"][:16] + "...", "SIZE": row["size_bytes"]}
@@ -1024,6 +1026,17 @@ def render_controlled_actions_vertical() -> None:
                 mime="application/zip",
                 use_container_width=True,
             )
+
+    with exec_right:
+        _render_panel_section_title("Decision Rationale")
+        st.text_area(
+            "Decision rationale",
+            value=rationale,
+            key=rationale_key,
+            height=220,
+            label_visibility="collapsed",
+            placeholder="Add a brief rationale for approval or rejection.",
+        )
 
 def render_real_estate_vertical() -> None:
     st.subheader("Real Estate Vertical")
