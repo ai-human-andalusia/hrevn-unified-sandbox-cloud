@@ -201,7 +201,14 @@ def _render_auth_shell() -> None:
     if st.session_state.get("auth_logged_in"):
         if st.session_state.get("auth_role") == "admin":
             st.sidebar.markdown("### Admin space")
-            st.sidebar.caption("Clean placeholder pending future administrator design.")
+            st.sidebar.caption("Collapsed admin navigation placeholder. Functional routing will be designed later.")
+            st.sidebar.button("Central Console", disabled=True, use_container_width=True)
+            st.sidebar.markdown("#### Verticals")
+            st.sidebar.button("Real Estate", disabled=True, use_container_width=True)
+            st.sidebar.button("GOV / Photovoltaic", disabled=True, use_container_width=True)
+            st.sidebar.button("Graphic Evidence", disabled=True, use_container_width=True)
+            st.sidebar.button("GENIUS Operations", disabled=True, use_container_width=True)
+            st.sidebar.button("Agent Operations", disabled=True, use_container_width=True)
         return
 
     st.title("HREVN Unified V1 — Access Shell")
