@@ -24,12 +24,14 @@ from common.services.auth_access_sqlite import (
     get_account_status,
     get_recent_auth_snapshot,
     log_auth_event,
+    log_auth_notification_event,
     reactivate_account,
     revoke_auth_session,
     set_account_status,
     touch_auth_session,
     upsert_auth_account,
 )
+from common.services.auth_notifications import send_smtp_notification
 from common.services.agent_operations_sqlite import (
     load_agent_operations_snapshot,
     set_agent_operation_decision,
@@ -203,6 +205,14 @@ def _secret_bool(key: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _secret_int(key: str, default: int) -> int:
+    raw = _secret_value(key, str(default))
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
 def _load_auth_shell_config() -> AuthShellConfig:
     admin_email = _secret_value("SANDBOX_ADMIN_EMAIL", "")
     admin_password = _secret_value("SANDBOX_ADMIN_PASSWORD", "")
@@ -241,6 +251,72 @@ def _sync_auth_accounts(cfg: AuthShellConfig) -> None:
         user_email="demo@hrevn.local",
         user_role="demo",
         account_source="built_in_demo",
+    )
+
+
+def _send_access_notification(
+    *,
+    related_user_email: str | None,
+    target_email: str | None,
+    event_type: str,
+    subject: str,
+    body: str,
+) -> None:
+    if not target_email:
+        log_auth_notification_event(
+            AUTH_ACCESS_SQLITE_PATH,
+            related_user_email=related_user_email,
+            target_email=target_email,
+            event_type=event_type,
+            delivery_channel="none",
+            delivery_status="not_configured",
+            subject=subject,
+            error_detail=None,
+            details_json=json.dumps({"reason": "missing_target_email"}),
+        )
+        return
+
+    smtp_enabled = _secret_bool("SMTP_ENABLED", False)
+    smtp_host = _secret_value("SMTP_HOST", "")
+    smtp_port = _secret_int("SMTP_PORT", 587)
+    smtp_user = _secret_value("SMTP_USER", "")
+    smtp_pass = _secret_value("SMTP_PASS", "")
+    mail_from = _secret_value("MAIL_FROM", "") or _secret_value("SANDBOX_RECOVERY_NOTIFY_EMAIL", "")
+
+    if not (smtp_enabled and smtp_host and smtp_user and smtp_pass and mail_from):
+        log_auth_notification_event(
+            AUTH_ACCESS_SQLITE_PATH,
+            related_user_email=related_user_email,
+            target_email=target_email,
+            event_type=event_type,
+            delivery_channel="none",
+            delivery_status="not_configured",
+            subject=subject,
+            error_detail=None,
+            details_json=json.dumps({"reason": "smtp_not_configured"}),
+        )
+        return
+
+    result = send_smtp_notification(
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        smtp_user=smtp_user,
+        smtp_pass=smtp_pass,
+        mail_from=mail_from,
+        target_email=target_email,
+        subject=subject,
+        body=body,
+    )
+    log_auth_notification_event(
+        AUTH_ACCESS_SQLITE_PATH,
+        related_user_email=related_user_email,
+        target_email=result.target_email,
+        event_type=event_type,
+        delivery_channel=result.delivery_channel,
+        delivery_status=result.delivery_status,
+        subject=result.subject,
+        error_detail=result.error_detail,
+        details_json=None,
     )
 
 
@@ -312,6 +388,11 @@ def _render_auth_shell() -> None:
     _init_auth_state()
 
     if st.session_state.get("auth_logged_in"):
+        current_email = st.session_state.get("auth_email") or ""
+        if current_email and get_account_status(AUTH_ACCESS_SQLITE_PATH, current_email) != "active":
+            _logout()
+            st.warning("This account is no longer active. The current session has been closed.")
+            st.stop()
         active_session_id = st.session_state.get("auth_session_id") or ""
         if active_session_id:
             touch_auth_session(AUTH_ACCESS_SQLITE_PATH, active_session_id)
@@ -469,9 +550,10 @@ def _render_auth_shell() -> None:
         if st.button("Request recovery"):
             context = _get_auth_request_context()
             requests = list(st.session_state.get("recovery_requests", []))
+            requested_email = recovery_email.strip().lower()
             requests.append(
                 {
-                    "email": recovery_email.strip(),
+                    "email": requested_email,
                     "status": "received",
                     "delivery_channel": "configured_secure_channel" if cfg.recovery_notify_email else "not_configured",
                 }
@@ -481,11 +563,22 @@ def _render_auth_shell() -> None:
                 AUTH_ACCESS_SQLITE_PATH,
                 user_email=None,
                 user_role=None,
-                identifier_attempted=recovery_email.strip().lower() or None,
+                identifier_attempted=requested_email or None,
                 event_type="password_reset_requested",
                 success_flag=True,
                 failure_reason=None,
                 context=context,
+            )
+            _send_access_notification(
+                related_user_email=requested_email or None,
+                target_email=requested_email or cfg.recovery_notify_email,
+                event_type="password_reset_requested",
+                subject="H-REVN access recovery request received",
+                body=(
+                    "We have received a password recovery request for the H-REVN unified workspace.\n\n"
+                    "If the account is registered and eligible, the secure recovery path will continue through the configured channel.\n\n"
+                    "This message is part of the H-REVN access audit trail."
+                ),
             )
             if cfg.recovery_notify_email:
                 st.success("Recovery request recorded. Delivery is configured for the secure notification path.")
@@ -508,6 +601,7 @@ def render_access_security_panel() -> None:
     events = snapshot.get("events", [])
     sessions = snapshot.get("sessions", [])
     lifecycle = snapshot.get("lifecycle", [])
+    notifications = snapshot.get("notifications", [])
 
     total_events = len(events)
     login_success = sum(1 for row in events if row.get("event_type") in {"login_success", "login_success_demo"})
@@ -530,7 +624,7 @@ def render_access_security_panel() -> None:
     with top_f:
         st.metric("Closed", closed_accounts)
 
-    tab_accounts, tab_events, tab_sessions, tab_lifecycle = st.tabs(["Accounts", "Access Events", "Active Sessions", "Lifecycle"])
+    tab_accounts, tab_events, tab_sessions, tab_lifecycle, tab_notifications = st.tabs(["Accounts", "Access Events", "Active Sessions", "Lifecycle", "Notifications"])
 
     with tab_accounts:
         account_rows = [
@@ -613,9 +707,21 @@ def render_access_security_panel() -> None:
                         context=context,
                         details_json=json.dumps({"reason": (action_reason or "").strip() or None}),
                     )
+                    _send_access_notification(
+                        related_user_email=selected_account,
+                        target_email=selected_account,
+                        event_type="account_suspended",
+                        subject="H-REVN access suspended",
+                        body=(
+                            f"Access for {selected_account} has been suspended in the H-REVN unified workspace.\n\n"
+                            f"Reason: {(action_reason or '').strip() or 'No reason provided'}\n\n"
+                            "Any active sessions were revoked as part of this action."
+                        ),
+                    )
                     st.success("Account suspended.")
                     st.rerun()
-                if button_b.button("Close", use_container_width=True, disabled=is_self or current_status == "closed"):
+                close_disabled = is_self or current_status == "closed" or not (action_reason or "").strip()
+                if button_b.button("Close", use_container_width=True, disabled=close_disabled):
                     set_account_status(
                         AUTH_ACCESS_SQLITE_PATH,
                         user_email=selected_account,
@@ -635,6 +741,17 @@ def render_access_security_panel() -> None:
                         failure_reason=None,
                         context=context,
                         details_json=json.dumps({"reason": (action_reason or "").strip() or None}),
+                    )
+                    _send_access_notification(
+                        related_user_email=selected_account,
+                        target_email=selected_account,
+                        event_type="account_closed",
+                        subject="H-REVN account closed",
+                        body=(
+                            f"Access for {selected_account} has been closed in the H-REVN unified workspace.\n\n"
+                            f"Reason: {(action_reason or '').strip()}\n\n"
+                            "Any active sessions were revoked as part of this action."
+                        ),
                     )
                     st.success("Account closed.")
                     st.rerun()
@@ -658,8 +775,22 @@ def render_access_security_panel() -> None:
                         context=context,
                         details_json=json.dumps({"reason": (action_reason or "").strip() or None}),
                     )
+                    _send_access_notification(
+                        related_user_email=selected_account,
+                        target_email=selected_account,
+                        event_type="account_reactivated",
+                        subject="H-REVN account reactivated",
+                        body=(
+                            f"Access for {selected_account} has been reactivated in the H-REVN unified workspace.\n\n"
+                            f"Reason: {(action_reason or '').strip() or 'No reason provided'}"
+                        ),
+                    )
                     st.success("Account reactivated.")
                     st.rerun()
+                if current_status != "active" and is_self:
+                    st.info("Self-management remains blocked for suspend and close.")
+                elif current_status != "active" and not (action_reason or "").strip():
+                    st.caption("A reason is required before closing an account.")
         else:
             st.info("No accounts registered yet.")
 
@@ -719,6 +850,25 @@ def render_access_security_panel() -> None:
                 for row in lifecycle
             ]
             st.dataframe(lifecycle_rows, use_container_width=True, hide_index=True)
+
+    with tab_notifications:
+        if not notifications:
+            st.info("No access notifications recorded yet.")
+        else:
+            notification_rows = [
+                {
+                    "WHEN": row.get("created_at_utc") or "-",
+                    "EVENT": row.get("event_type") or "-",
+                    "USER": row.get("related_user_email") or "-",
+                    "TARGET": row.get("target_email") or "-",
+                    "CHANNEL": row.get("delivery_channel") or "-",
+                    "STATUS": row.get("delivery_status") or "-",
+                    "SUBJECT": row.get("subject") or "-",
+                    "ERROR": row.get("error_detail") or "-",
+                }
+                for row in notifications
+            ]
+            st.dataframe(notification_rows, use_container_width=True, hide_index=True)
 
 
 def _prepare_real_estate_context(snapshot, visit_id: str) -> dict:

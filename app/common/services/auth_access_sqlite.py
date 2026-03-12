@@ -92,6 +92,19 @@ def ensure_auth_access_db(db_path: Path) -> None:
               created_at_utc TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS auth_notification_events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              related_user_email TEXT,
+              target_email TEXT,
+              event_type TEXT NOT NULL,
+              delivery_channel TEXT NOT NULL,
+              delivery_status TEXT NOT NULL,
+              subject TEXT,
+              error_detail TEXT,
+              created_at_utc TEXT NOT NULL,
+              details_json TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_auth_accounts_status ON auth_accounts(account_status);
             CREATE INDEX IF NOT EXISTS idx_auth_login_events_created_at ON auth_login_events(created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_auth_login_events_email ON auth_login_events(user_email);
@@ -99,6 +112,7 @@ def ensure_auth_access_db(db_path: Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_auth_active_sessions_state ON auth_active_sessions(session_state);
             CREATE INDEX IF NOT EXISTS idx_auth_lifecycle_email ON auth_account_lifecycle_events(user_email);
             CREATE INDEX IF NOT EXISTS idx_auth_lifecycle_created_at ON auth_account_lifecycle_events(created_at_utc);
+            CREATE INDEX IF NOT EXISTS idx_auth_notifications_created_at ON auth_notification_events(created_at_utc);
             '''
         )
 
@@ -113,6 +127,10 @@ def upsert_auth_account(
     ensure_auth_access_db(db_path)
     now = _utc_now()
     with _connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT user_email FROM auth_accounts WHERE lower(user_email)=lower(?)",
+            (user_email,),
+        ).fetchone()
         conn.execute(
             '''
             INSERT INTO auth_accounts(
@@ -125,6 +143,17 @@ def upsert_auth_account(
             ''',
             (user_email, user_role, account_source, now, now),
         )
+        if existing is None:
+            conn.execute(
+                '''
+                INSERT INTO auth_account_lifecycle_events(
+                  user_email, user_role, previous_status, resulting_status, event_type,
+                  performed_by_user_email, performed_by_user_role, reason,
+                  ip_public, user_agent, request_origin, created_at_utc
+                ) VALUES (?, ?, NULL, 'active', 'account_registered', NULL, NULL, ?, 'system', 'system', ?, ?)
+                ''',
+                (user_email, user_role, f"registered_from:{account_source}", account_source, now),
+            )
 
 
 def get_account_status(db_path: Path, user_email: str) -> str:
@@ -263,6 +292,41 @@ def reactivate_account(
         )
 
 
+def log_auth_notification_event(
+    db_path: Path,
+    *,
+    related_user_email: str | None,
+    target_email: str | None,
+    event_type: str,
+    delivery_channel: str,
+    delivery_status: str,
+    subject: str | None,
+    error_detail: str | None = None,
+    details_json: str | None = None,
+) -> None:
+    ensure_auth_access_db(db_path)
+    with _connect(db_path) as conn:
+        conn.execute(
+            '''
+            INSERT INTO auth_notification_events(
+              related_user_email, target_email, event_type, delivery_channel, delivery_status,
+              subject, error_detail, created_at_utc, details_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                related_user_email,
+                target_email,
+                event_type,
+                delivery_channel,
+                delivery_status,
+                subject,
+                error_detail,
+                _utc_now(),
+                details_json,
+            ),
+        )
+
+
 def log_auth_event(
     db_path: Path,
     *,
@@ -376,4 +440,8 @@ def get_recent_auth_snapshot(db_path: Path, limit: int = 20) -> dict[str, list[d
             "SELECT user_email, user_role, previous_status, resulting_status, event_type, performed_by_user_email, performed_by_user_role, reason, created_at_utc FROM auth_account_lifecycle_events ORDER BY id DESC LIMIT ?",
             (limit,),
         )]
-    return {"accounts": accounts, "events": events, "sessions": sessions, "lifecycle": lifecycle}
+        notifications = [dict(r) for r in conn.execute(
+            "SELECT related_user_email, target_email, event_type, delivery_channel, delivery_status, subject, error_detail, created_at_utc FROM auth_notification_events ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )]
+    return {"accounts": accounts, "events": events, "sessions": sessions, "lifecycle": lifecycle, "notifications": notifications}
