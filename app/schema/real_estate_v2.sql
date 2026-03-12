@@ -3,6 +3,9 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS re_accounts (
   account_id TEXT PRIMARY KEY,
   user_email TEXT NOT NULL UNIQUE,
+  first_name TEXT NOT NULL,
+  last_name TEXT NOT NULL,
+  display_name TEXT,
   user_phone TEXT,
   user_role TEXT NOT NULL,
   subgroup TEXT NOT NULL CHECK (subgroup IN ('building_admin', 'property_manager')),

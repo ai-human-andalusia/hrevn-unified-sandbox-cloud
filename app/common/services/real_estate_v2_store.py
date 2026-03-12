@@ -64,7 +64,7 @@ def get_re_v2_enterprise_assignment_detail(enterprise_id: str, db_path: Path | N
         rows = conn.execute(
             """
             SELECT
-              a.user_email AS property_or_user,
+              COALESCE(a.display_name, TRIM(a.first_name || ' ' || a.last_name), a.user_email) AS property_or_user,
               COALESCE(json_extract(a.profile_data_json, '$.reference_code'), '') AS user_reference,
               s.asset_name,
               s.asset_public_id,
@@ -87,7 +87,7 @@ def get_re_v2_enterprise_assignment_detail(enterprise_id: str, db_path: Path | N
 def list_re_v2_accounts(db_path: Path | None = None) -> list[dict]:
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT account_id, user_email, user_phone, user_role, subgroup, enterprise_id, account_status, preferred_language, created_at_utc FROM re_accounts ORDER BY created_at_utc DESC LIMIT 50"
+            "SELECT account_id, user_email, first_name, last_name, display_name, user_phone, user_role, subgroup, enterprise_id, account_status, preferred_language, created_at_utc FROM re_accounts ORDER BY created_at_utc DESC LIMIT 50"
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -122,7 +122,7 @@ def list_re_v2_asset_demands_rows(db_path: Path | None = None) -> list[dict]:
               e.enterprise_id,
               e.enterprise_name,
               a.account_id,
-              a.user_email AS property_or_user,
+              COALESCE(a.display_name, TRIM(a.first_name || ' ' || a.last_name), a.user_email) AS property_or_user,
               COALESCE(json_extract(a.profile_data_json, '$.reference_code'), '') AS user_reference,
               s.asset_id,
               s.asset_name,
@@ -150,7 +150,8 @@ def list_re_v2_visits(db_path: Path | None = None) -> list[dict]:
             SELECT
               v.visit_date_utc,
               v.visit_id,
-              COALESCE(a.user_email, '') AS created_by_user,
+              COALESCE(a.first_name, '') AS created_by_first_name,
+              COALESCE(a.last_name, '') AS created_by_last_name,
               COALESCE(s.asset_name, '') AS asset_name,
               v.visit_status,
               v.review_status,
@@ -166,20 +167,23 @@ def list_re_v2_visits(db_path: Path | None = None) -> list[dict]:
         return [dict(row) for row in rows]
 
 
-def create_re_v2_account(*, user_email: str, user_phone: str, user_role: str, subgroup: str, enterprise_id: str, preferred_language: str, profile_data: dict, db_path: Path | None = None) -> str:
+def create_re_v2_account(*, user_email: str, first_name: str, last_name: str, display_name: str, user_phone: str, user_role: str, subgroup: str, enterprise_id: str, preferred_language: str, profile_data: dict, db_path: Path | None = None) -> str:
     account_id = _new_id("REA")
     now = _now_utc()
     with _connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO re_accounts (
-              account_id, user_email, user_phone, user_role, subgroup, enterprise_id,
+              account_id, user_email, first_name, last_name, display_name, user_phone, user_role, subgroup, enterprise_id,
               account_status, preferred_language, profile_data_json, created_at_utc, updated_at_utc
-            ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
             """,
             (
                 account_id,
                 user_email.strip().lower(),
+                first_name.strip(),
+                last_name.strip(),
+                display_name.strip() or None,
                 user_phone.strip() or None,
                 user_role.strip() or "operator",
                 subgroup,
@@ -319,6 +323,9 @@ def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
             'accounts': [
                 {
                     'user_email': 'laura.adminfincas@andaluciabuildingservices.demo',
+                    'first_name': 'Laura',
+                    'last_name': 'Martin',
+                    'display_name': '',
                     'user_phone': '+34 600 100 101',
                     'subgroup': 'building_admin',
                     'preferred_language': 'es',
@@ -326,6 +333,9 @@ def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
                 },
                 {
                     'user_email': 'diego.property@andaluciabuildingservices.demo',
+                    'first_name': 'Diego',
+                    'last_name': 'Serrano',
+                    'display_name': '',
                     'user_phone': '+34 600 100 102',
                     'subgroup': 'property_manager',
                     'preferred_language': 'es',
@@ -363,6 +373,9 @@ def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
             'accounts': [
                 {
                     'user_email': 'marta.adminfincas@iberiaportfolio.demo',
+                    'first_name': 'Marta',
+                    'last_name': 'Lopez',
+                    'display_name': '',
                     'user_phone': '+34 600 200 201',
                     'subgroup': 'building_admin',
                     'preferred_language': 'en',
@@ -370,6 +383,9 @@ def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
                 },
                 {
                     'user_email': 'alex.property@iberiaportfolio.demo',
+                    'first_name': 'Alex',
+                    'last_name': 'Ruiz',
+                    'display_name': '',
                     'user_phone': '+34 600 200 202',
                     'subgroup': 'property_manager',
                     'preferred_language': 'en',
@@ -419,6 +435,9 @@ def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
         for account in pack['accounts']:
             account_id = create_re_v2_account(
                 user_email=account['user_email'],
+                first_name=account['first_name'],
+                last_name=account['last_name'],
+                display_name=account['display_name'],
                 user_phone=account['user_phone'],
                 user_role='operator',
                 subgroup=account['subgroup'],

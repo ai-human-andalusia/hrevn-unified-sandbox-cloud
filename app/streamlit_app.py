@@ -2790,6 +2790,9 @@ def _render_real_estate_v2_builder() -> None:
         col1, col2 = st.columns(2)
         with col1:
             user_email = st.text_input("User email", key="re_v2_user_email")
+            first_name = st.text_input("First name", key="re_v2_user_first_name")
+            last_name = st.text_input("Last name", key="re_v2_user_last_name")
+            display_name = st.text_input("Display name (optional)", key="re_v2_user_display_name")
             user_phone = st.text_input("User phone (optional)", key="re_v2_user_phone")
             preferred_language = st.selectbox("Preferred language", ["en", "es"], key="re_v2_user_lang")
         with col2:
@@ -2810,12 +2813,17 @@ def _render_real_estate_v2_builder() -> None:
         if st.button("Create account", type="primary", key="re_v2_create_account"):
             if not user_email.strip():
                 st.warning("User email is required.")
+            elif not first_name.strip() or not last_name.strip():
+                st.warning("First name and last name are required.")
             elif not enterprise_id:
                 st.warning("You need to create an enterprise before creating the user account.")
             else:
                 profile_data = {"scope_field": scope_field.strip(), "reference_code": ref_field.strip()}
                 account_id = create_re_v2_account(
                     user_email=user_email,
+                    first_name=first_name,
+                    last_name=last_name,
+                    display_name=display_name,
                     user_phone=user_phone,
                     user_role="operator",
                     subgroup=subgroup,
