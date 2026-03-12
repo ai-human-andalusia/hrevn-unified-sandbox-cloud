@@ -23,6 +23,10 @@ def _random_token() -> str:
     return secrets.token_urlsafe(24)
 
 
+def _utc_epoch() -> int:
+    return int(datetime.now(timezone.utc).timestamp())
+
+
 def _password_material(password: str, salt_b64: str | None = None) -> tuple[str, str]:
     if salt_b64 is None:
         salt = secrets.token_bytes(16)
@@ -59,7 +63,10 @@ def ensure_auth_access_db(db_path: Path) -> None:
               created_at_utc TEXT NOT NULL,
               updated_at_utc TEXT NOT NULL,
               suspended_at_utc TEXT,
-              closed_at_utc TEXT
+              closed_at_utc TEXT,
+              failed_login_count INTEGER NOT NULL DEFAULT 0,
+              last_failed_login_at_utc TEXT,
+              lockout_until_utc TEXT
             );
 
             CREATE TABLE IF NOT EXISTS auth_local_credentials (
@@ -401,6 +408,64 @@ def get_account_status(db_path: Path, user_email: str) -> str:
     return str(row["account_status"]) if row else "active"
 
 
+def get_account_record(db_path: Path, user_email: str) -> dict[str, Any] | None:
+    ensure_auth_access_db(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM auth_accounts WHERE lower(user_email)=lower(?)",
+            (user_email,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def register_failed_login(db_path: Path, *, user_email: str) -> dict[str, Any] | None:
+    ensure_auth_access_db(db_path)
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT failed_login_count FROM auth_accounts WHERE lower(user_email)=lower(?)",
+            (user_email,),
+        ).fetchone()
+        if row is None:
+            return None
+        failed_count = int(row["failed_login_count"] or 0) + 1
+        lockout_until = now if failed_count >= 5 else None
+        conn.execute(
+            '''
+            UPDATE auth_accounts
+            SET failed_login_count=?,
+                last_failed_login_at_utc=?,
+                lockout_until_utc=CASE WHEN ?>=5 THEN ? ELSE lockout_until_utc END,
+                updated_at_utc=?
+            WHERE lower(user_email)=lower(?)
+            ''',
+            (failed_count, now, failed_count, lockout_until, now, user_email),
+        )
+    return get_account_record(db_path, user_email)
+
+
+def clear_failed_login_state(db_path: Path, *, user_email: str) -> None:
+    ensure_auth_access_db(db_path)
+    with _connect(db_path) as conn:
+        conn.execute(
+            '''
+            UPDATE auth_accounts
+            SET failed_login_count=0,
+                last_failed_login_at_utc=NULL,
+                lockout_until_utc=NULL,
+                updated_at_utc=?
+            WHERE lower(user_email)=lower(?)
+            ''',
+            (_utc_now(), user_email),
+        )
+
+
+def is_account_temporarily_locked(record: dict[str, Any] | None) -> bool:
+    if not record:
+        return False
+    return bool(record.get("lockout_until_utc"))
+
+
 def set_account_status(
     db_path: Path,
     *,
@@ -632,6 +697,33 @@ def create_auth_session(
             ),
         )
     return session_id
+
+
+def count_active_sessions(db_path: Path, *, user_email: str) -> int:
+    ensure_auth_access_db(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS total FROM auth_active_sessions WHERE lower(user_email)=lower(?) AND session_state='active'",
+            (user_email,),
+        ).fetchone()
+    return int(row["total"] or 0) if row else 0
+
+
+def revoke_all_active_sessions_for_user(db_path: Path, *, user_email: str) -> int:
+    ensure_auth_access_db(db_path)
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            '''
+            UPDATE auth_active_sessions
+            SET session_state='revoked',
+                revoked_at_utc=?,
+                last_seen_at_utc=?
+            WHERE lower(user_email)=lower(?) AND session_state='active'
+            ''',
+            (now, now, user_email),
+        )
+    return int(cursor.rowcount or 0)
 
 
 def touch_auth_session(db_path: Path, session_id: str) -> None:

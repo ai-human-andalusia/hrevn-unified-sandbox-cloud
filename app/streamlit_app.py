@@ -21,14 +21,20 @@ from common.services.agent_operations_package import AERSigningConfig, build_age
 from common.services.auth_access_sqlite import (
     AuthRequestContext,
     authenticate_local_account,
+    clear_failed_login_state,
+    count_active_sessions,
     create_local_account,
     create_auth_session,
+    get_account_record,
     get_account_status,
     get_recent_auth_snapshot,
+    is_account_temporarily_locked,
     issue_password_reset_token,
     log_auth_event,
     log_auth_notification_event,
+    register_failed_login,
     reactivate_account,
+    revoke_all_active_sessions_for_user,
     revoke_auth_session,
     reset_local_password,
     set_account_status,
@@ -374,6 +380,10 @@ def _password_policy_ok(password: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _max_active_sessions() -> int:
+    return _secret_int("SANDBOX_MAX_ACTIVE_SESSIONS_PER_USER", 3)
+
+
 def _logout() -> None:
     session_id = st.session_state.get("auth_session_id") or ""
     auth_email = st.session_state.get("auth_email") or None
@@ -457,8 +467,21 @@ def _render_auth_shell() -> None:
                         matched = (str(local_match.get("user_role") or "operator"), str(local_match.get("user_email") or email.strip().lower()))
 
                 if matched:
-                    account_status = get_account_status(AUTH_ACCESS_SQLITE_PATH, matched[1])
-                    if account_status != "active":
+                    account_record = get_account_record(AUTH_ACCESS_SQLITE_PATH, matched[1])
+                    account_status = str((account_record or {}).get("account_status") or get_account_status(AUTH_ACCESS_SQLITE_PATH, matched[1]))
+                    if is_account_temporarily_locked(account_record):
+                        log_auth_event(
+                            AUTH_ACCESS_SQLITE_PATH,
+                            user_email=matched[1],
+                            user_role=matched[0],
+                            identifier_attempted=email.strip().lower() or None,
+                            event_type="login_failure",
+                            success_flag=False,
+                            failure_reason="temporary_lockout",
+                            context=context,
+                        )
+                        st.error("This account is temporarily locked after repeated failed login attempts.")
+                    elif account_status != "active":
                         log_auth_event(
                             AUTH_ACCESS_SQLITE_PATH,
                             user_email=matched[1],
@@ -471,6 +494,23 @@ def _render_auth_shell() -> None:
                         )
                         st.error(f"Account is {account_status}. Access is blocked.")
                     else:
+                        current_active_sessions = count_active_sessions(AUTH_ACCESS_SQLITE_PATH, user_email=matched[1])
+                        max_sessions = _max_active_sessions()
+                        if current_active_sessions >= max_sessions:
+                            log_auth_event(
+                                AUTH_ACCESS_SQLITE_PATH,
+                                user_email=matched[1],
+                                user_role=matched[0],
+                                identifier_attempted=email.strip().lower() or None,
+                                event_type="login_failure",
+                                success_flag=False,
+                                failure_reason="session_limit_reached",
+                                context=context,
+                                details_json=json.dumps({"max_active_sessions": max_sessions}),
+                            )
+                            st.error(f"Session limit reached for this account ({max_sessions}).")
+                            st.stop()
+                        clear_failed_login_state(AUTH_ACCESS_SQLITE_PATH, user_email=matched[1])
                         session_id = create_auth_session(
                             AUTH_ACCESS_SQLITE_PATH,
                             user_email=matched[1],
@@ -494,6 +534,12 @@ def _render_auth_shell() -> None:
                         st.success("Access granted.")
                         st.rerun()
                 elif cfg.auth_enabled and cfg.has_configured_accounts:
+                    local_account = get_account_record(AUTH_ACCESS_SQLITE_PATH, email.strip().lower())
+                    if local_account:
+                        updated = register_failed_login(AUTH_ACCESS_SQLITE_PATH, user_email=email.strip().lower())
+                        failure_reason = "invalid_credentials_or_password"
+                        if is_account_temporarily_locked(updated):
+                            failure_reason = "temporary_lockout"
                     log_auth_event(
                         AUTH_ACCESS_SQLITE_PATH,
                         user_email=None,
@@ -501,10 +547,13 @@ def _render_auth_shell() -> None:
                         identifier_attempted=email.strip().lower() or None,
                         event_type="login_failure",
                         success_flag=False,
-                        failure_reason="invalid_credentials_or_password",
+                        failure_reason=failure_reason if local_account else "invalid_credentials_or_password",
                         context=context,
                     )
-                    st.error("Invalid credentials.")
+                    if local_account and failure_reason == "temporary_lockout":
+                        st.error("Too many failed login attempts. This account is temporarily locked.")
+                    else:
+                        st.error("Invalid credentials.")
                 else:
                     st.warning("Auth shell is not fully configured yet. Use documentary demo access below.")
 
@@ -857,6 +906,8 @@ def render_access_security_panel() -> None:
                         "USER": account_row.get("user_email") or "-",
                         "ROLE": account_row.get("user_role") or "-",
                         "STATUS": account_row.get("account_status") or "-",
+                        "FAILED LOGINS": account_row.get("failed_login_count") or 0,
+                        "LOCKOUT": account_row.get("lockout_until_utc") or "-",
                     }],
                     use_container_width=True,
                     hide_index=True,
@@ -990,6 +1041,24 @@ def render_access_security_panel() -> None:
                         ),
                     )
                     st.success("Account reactivated.")
+                    st.rerun()
+                if st.button("Revoke active sessions", use_container_width=True, key=f"revoke_sessions_{selected_account}"):
+                    revoked = revoke_all_active_sessions_for_user(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=selected_account,
+                    )
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=selected_account,
+                        user_role=account_row.get("user_role"),
+                        identifier_attempted=selected_account,
+                        event_type="sessions_revoked_by_admin",
+                        success_flag=True,
+                        failure_reason=None,
+                        context=context,
+                        details_json=json.dumps({"revoked_sessions": revoked}),
+                    )
+                    st.success(f"Revoked {revoked} active session(s).")
                     st.rerun()
                 if current_status != "active" and is_self:
                     st.info("Self-management remains blocked for suspend and close.")
