@@ -285,6 +285,7 @@ def build_agent_operation_aer_package(record: dict[str, Any], signing_config: AE
         {"artifact": "agent_operation_review_report.pdf", "category": "core", "role": "human_readable_review_report"},
         {"artifact": "manifest.json", "category": "control", "role": "package_manifest"},
         {"artifact": "PROTOCOL_PROFILE.txt", "category": "support", "role": "package_profile_summary"},
+        {"artifact": "RIGHTS_NOTICE.txt", "category": "support", "role": "rights_and_ip_notice"},
         {"artifact": "VERIFICATION.txt", "category": "support", "role": "verification_guidance_summary"},
         {"artifact": "HOW_TO_VERIFY_THIS_AER_PACKAGE.txt", "category": "support", "role": "step_by_step_verification_guide"},
         {"artifact": "CHECKSUMS.sha256", "category": "verification", "role": "artifact_hash_list"},
@@ -324,6 +325,7 @@ def build_agent_operation_aer_package(record: dict[str, Any], signing_config: AE
         ],
         "supporting_files": [
             "PROTOCOL_PROFILE.txt",
+            "RIGHTS_NOTICE.txt",
             "VERIFICATION.txt",
             "HOW_TO_VERIFY_THIS_AER_PACKAGE.txt",
         ],
@@ -334,6 +336,7 @@ def build_agent_operation_aer_package(record: dict[str, Any], signing_config: AE
             "agent_operation_review_report.pdf",
             "manifest.json",
             "PROTOCOL_PROFILE.txt",
+            "RIGHTS_NOTICE.txt",
             "VERIFICATION.txt",
             "HOW_TO_VERIFY_THIS_AER_PACKAGE.txt",
             "ROOT_HASH_SHA256.txt",
@@ -384,6 +387,20 @@ def build_agent_operation_aer_package(record: dict[str, Any], signing_config: AE
         "VERIFICATION MODEL = ROOT_AER_V1\n"
         "CLASSIC H-REVN VISIT BUNDLE = not applicable\n"
         "EXTERNAL ANCHOR STATUS = not_anchored\n"
+    ).encode("utf-8")
+    artifacts["RIGHTS_NOTICE.txt"] = (
+        "H-REVN AER package\n"
+        "\n"
+        "Copyright © 2026 H-REVN. All rights reserved.\n"
+        "\n"
+        "This package and its included documentation, schemas, verification materials,\n"
+        "and software-generated records are proprietary to H-REVN except where otherwise stated.\n"
+        "\n"
+        "This package follows the H-REVN AER profile. The H-REVN protocol, documentation,\n"
+        "and related materials are protected under applicable intellectual property laws.\n"
+        "\n"
+        "Any registration references, if applicable, should be verified against the corresponding\n"
+        "official records and should be cited using the exact registration identifier.\n"
     ).encode("utf-8")
     artifacts["VERIFICATION.txt"] = (
         "This package is an H-REVN AER package, not a classic visit bundle.\n"
