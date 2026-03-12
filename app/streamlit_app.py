@@ -5,6 +5,7 @@ No real access, no external source systems, documentary-safe views only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -243,14 +244,13 @@ def _render_auth_shell() -> None:
                     st.rerun()
         with right:
             st.markdown("#### Access status")
-            st.write(
-                {
-                    "auth_enabled": cfg.auth_enabled,
-                    "configured_accounts": cfg.has_configured_accounts,
-                    "fallback_demo_mode": True,
-                    "workspace_scope": "sandbox_only",
-                }
-            )
+            status_rows = [
+                {"Item": "Auth shell", "State": "enabled" if cfg.auth_enabled else "demo mode"},
+                {"Item": "Configured accounts", "State": "available" if cfg.has_configured_accounts else "not configured yet"},
+                {"Item": "Fallback access", "State": "documentary demo mode"},
+                {"Item": "Workspace scope", "State": "sandbox only"},
+            ]
+            st.dataframe(status_rows, use_container_width=True, hide_index=True)
             st.info(
                 "This layer gives us the structure for login and recovery now. Real credential hardening can be attached later through Streamlit secrets."
             )
@@ -686,6 +686,220 @@ def _render_legacy_panel_c(context: dict) -> None:
     )
 
 
+def _init_controlled_actions_state() -> None:
+    if "controlled_actions_events" in st.session_state:
+        return
+    st.session_state["controlled_actions_events"] = {
+        "CAR-2026-001": {
+            "record_id": "CAR-2026-001",
+            "submitted_at_utc": "2026-03-12T09:10:00Z",
+            "agent_name": "Treasury_Bot_v2",
+            "intent": "Outgoing payment release",
+            "tool_name": "Swift_Transfer_API",
+            "risk_level": "HIGH",
+            "approval_policy": "Treasury dual approval",
+            "review_reason": "Outgoing payment above policy threshold.",
+            "status": "pending_review",
+            "human_action": "pending",
+            "seal_status": "not_sealed",
+            "seal_reference": "",
+            "recommended_for_execution": False,
+            "parameters": [
+                {"field": "amount", "value": "5000"},
+                {"field": "currency", "value": "USD"},
+                {"field": "destination", "value": "Vendor_Acct_8832"},
+                {"field": "reference", "value": "INV-505"},
+            ],
+        },
+        "CAR-2026-002": {
+            "record_id": "CAR-2026-002",
+            "submitted_at_utc": "2026-03-11T18:05:00Z",
+            "agent_name": "Access_Bot_v1",
+            "intent": "Admin password reset",
+            "tool_name": "IAM_Admin_API",
+            "risk_level": "CRITICAL",
+            "approval_policy": "CISO approval required",
+            "review_reason": "Administrative credential operation.",
+            "status": "executed_sealed",
+            "human_action": "approved",
+            "seal_status": "sealed",
+            "seal_reference": "sha256:8f3c4a1b9d9a0f7d2b11",
+            "recommended_for_execution": True,
+            "parameters": [
+                {"field": "target_user", "value": "j.doe@company.com"},
+                {"field": "action", "value": "force_reset"},
+            ],
+        },
+        "CAR-2026-003": {
+            "record_id": "CAR-2026-003",
+            "submitted_at_utc": "2026-03-10T13:42:00Z",
+            "agent_name": "Legal_Bot_v3",
+            "intent": "Wallet precautionary freeze",
+            "tool_name": "Chain_Freeze_API",
+            "risk_level": "HIGH",
+            "approval_policy": "Legal counsel review",
+            "review_reason": "Irreversible action over client funds.",
+            "status": "rejected",
+            "human_action": "rejected",
+            "seal_status": "sealed_rejection",
+            "seal_reference": "sha256:rejected_no_action_7721",
+            "recommended_for_execution": False,
+            "parameters": [
+                {"field": "wallet_address", "value": "0x7a59...8f3c"},
+                {"field": "reason_code", "value": "SEC_INQUIRY"},
+            ],
+        },
+    }
+
+
+def _controlled_actions_status_label(value: str) -> str:
+    labels = {
+        "pending_review": "Pending review",
+        "executed_sealed": "Executed and sealed",
+        "rejected": "Rejected",
+    }
+    return labels.get(value, value.replace("_", " ").title())
+
+
+def _controlled_actions_risk_rank(value: str) -> int:
+    order = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+    return order.get(str(value or "").upper(), 0)
+
+
+def _approve_controlled_action(record_id: str) -> None:
+    event = st.session_state["controlled_actions_events"][record_id]
+    raw = f"{record_id}|approved|{event['agent_name']}|{event['intent']}|{event['submitted_at_utc']}"
+    event["status"] = "executed_sealed"
+    event["human_action"] = "approved"
+    event["seal_status"] = "sealed"
+    event["recommended_for_execution"] = True
+    event["seal_reference"] = f"sha256:{hashlib.sha256(raw.encode()).hexdigest()[:20]}"
+
+
+def _reject_controlled_action(record_id: str) -> None:
+    event = st.session_state["controlled_actions_events"][record_id]
+    raw = f"{record_id}|rejected|{event['agent_name']}|{event['intent']}|{event['submitted_at_utc']}"
+    event["status"] = "rejected"
+    event["human_action"] = "rejected"
+    event["seal_status"] = "sealed_rejection"
+    event["recommended_for_execution"] = False
+    event["seal_reference"] = f"sha256:{hashlib.sha256(raw.encode()).hexdigest()[:20]}"
+
+
+def render_controlled_actions_vertical() -> None:
+    _init_controlled_actions_state()
+    st.subheader("Controlled Actions Vertical")
+    st.caption("Review-ready records for sensitive operations that require human approval before execution.")
+
+    events = st.session_state["controlled_actions_events"]
+    records = list(events.values())
+    records.sort(key=lambda item: (item["status"] != "pending_review", -_controlled_actions_risk_rank(item["risk_level"]), item["record_id"]))
+
+    metric_1, metric_2, metric_3, metric_4 = st.columns(4)
+    metric_1.metric("Records", len(records))
+    metric_2.metric("Pending review", sum(1 for item in records if item["status"] == "pending_review"))
+    metric_3.metric("Approved", sum(1 for item in records if item["human_action"] == "approved"))
+    metric_4.metric("Rejected", sum(1 for item in records if item["human_action"] == "rejected"))
+
+    list_col, detail_col = st.columns([1.05, 1.95])
+
+    with list_col:
+        st.markdown("### Recent records")
+        table_rows = [
+            {
+                "Record": item["record_id"],
+                "Agent": item["agent_name"],
+                "Intent": item["intent"],
+                "Risk": item["risk_level"],
+                "Status": _controlled_actions_status_label(item["status"]),
+            }
+            for item in records
+        ]
+        st.dataframe(table_rows, use_container_width=True, hide_index=True)
+        labels = [f"{item['record_id']} | {_controlled_actions_status_label(item['status'])} | {item['intent']}" for item in records]
+        selected_label = st.radio("Select record", labels, key="controlled_actions_selected")
+        selected_id = selected_label.split(" | ")[0]
+        selected = events[selected_id]
+
+    with detail_col:
+        st.markdown("### Auditor review record")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Risk level", selected["risk_level"])
+        c2.metric("Approval policy", selected["approval_policy"])
+        c3.metric("Current status", _controlled_actions_status_label(selected["status"]))
+
+        st.markdown("### Why human review is required")
+        st.info(selected["review_reason"])
+
+        block_a, block_b = st.columns([1.1, 0.9])
+        with block_a:
+            st.markdown("### Proposed action")
+            st.dataframe(
+                [
+                    {"Field": "Record ID", "Value": selected["record_id"]},
+                    {"Field": "Submitted at", "Value": selected["submitted_at_utc"]},
+                    {"Field": "Agent", "Value": selected["agent_name"]},
+                    {"Field": "Intent", "Value": selected["intent"]},
+                    {"Field": "Tool", "Value": selected["tool_name"]},
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.markdown("#### Action parameters")
+            st.dataframe(
+                [{"Parameter": row["field"], "Value": row["value"]} for row in selected["parameters"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+        with block_b:
+            st.markdown("### Human approval")
+            decision_rows = [
+                {"Control": "Human action", "State": selected["human_action"].replace("_", " ").title()},
+                {"Control": "Recommended for execution", "State": "Yes" if selected["recommended_for_execution"] else "No"},
+                {"Control": "Seal status", "State": selected["seal_status"].replace("_", " ").title()},
+            ]
+            st.dataframe(decision_rows, use_container_width=True, hide_index=True)
+            if selected["status"] == "pending_review":
+                btn1, btn2 = st.columns(2)
+                with btn1:
+                    if st.button("Approve and execute", type="primary", use_container_width=True, key=f"approve_{selected_id}"):
+                        _approve_controlled_action(selected_id)
+                        st.rerun()
+                with btn2:
+                    if st.button("Reject", use_container_width=True, key=f"reject_{selected_id}"):
+                        _reject_controlled_action(selected_id)
+                        st.rerun()
+            elif selected["status"] == "executed_sealed":
+                st.success("Execution approved and sealed.")
+            else:
+                st.error("Action rejected. Rejection record sealed.")
+
+        st.markdown("### Execution record and seal")
+        seal_rows = [
+            {"Field": "Seal reference", "Value": selected["seal_reference"] or "Pending decision"},
+            {"Field": "Export package", "Value": "Ready" if selected["status"] != "pending_review" else "Waiting for human decision"},
+            {"Field": "Record type", "Value": "Controlled action review record"},
+        ]
+        st.dataframe(seal_rows, use_container_width=True, hide_index=True)
+
+        if selected["status"] != "pending_review":
+            export_text = "\n".join([
+                f"Record: {selected['record_id']}",
+                f"Agent: {selected['agent_name']}",
+                f"Intent: {selected['intent']}",
+                f"Decision: {selected['human_action']}",
+                f"Seal: {selected['seal_reference']}",
+            ])
+            st.download_button(
+                "Export review-ready package",
+                data=export_text.encode("utf-8"),
+                file_name=f"{selected_id}_review_package.txt",
+                mime="text/plain",
+                use_container_width=True,
+            )
+        else:
+            st.caption("Package export becomes available after human approval or rejection.")
+
 def render_real_estate_vertical() -> None:
     st.subheader("Real Estate Vertical")
     st.caption("Pilot workspace over the Real Estate SQLite snapshot, with improved operator view and legacy references.")
@@ -955,9 +1169,10 @@ def main() -> None:
         "Documentary-only UI. No real source access, no SQLite writes, no real data reads outside the bundled sandbox snapshot."
     )
 
-    tab_re, tab_schema, tab_mapping, tab_dryrun = st.tabs(
+    tab_re, tab_actions, tab_schema, tab_mapping, tab_dryrun = st.tabs(
         [
             "Real Estate Vertical",
+            "Controlled Actions",
             "Schema Explorer",
             "Mapping Validator UI",
             "Dry-Run Convergence Dashboard",
@@ -966,6 +1181,8 @@ def main() -> None:
 
     with tab_re:
         render_real_estate_vertical()
+    with tab_actions:
+        render_controlled_actions_vertical()
     with tab_schema:
         render_schema_explorer()
     with tab_mapping:
