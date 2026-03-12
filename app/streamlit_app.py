@@ -2455,10 +2455,7 @@ def _render_rwa_placeholder() -> None:
             st.session_state[asset_key] = chosen_asset_id
             if chosen_asset_id != previous_asset_id:
                 st.session_state[visit_draft_key] = _build_visit_draft_id(chosen_asset_id)
-                if st.session_state.get(mode_key) == "new_observation":
-                    st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state[visit_draft_key])
-                else:
-                    st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state[visit_draft_key])
+                st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state[visit_draft_key])
 
         current_asset_id = st.session_state.get(asset_key, "")
         current_asset_row = next((item for item in all_assets if str(item.get('asset_id') or '') == current_asset_id), None)
@@ -2485,17 +2482,6 @@ def _render_rwa_placeholder() -> None:
             key="rwa_severity",
         )
         min_photos = 3 if int(severity) >= 3 else 1
-        uploaded_files = st.file_uploader(
-            "Upload photos",
-            type=["jpg", "jpeg", "png"],
-            accept_multiple_files=True,
-            key="rwa_uploader",
-        )
-        uploaded_count = len(uploaded_files or [])
-        if uploaded_count >= min_photos:
-            st.success(f"Photos: {uploaded_count}/{min_photos}")
-        else:
-            st.error(f"Photos: {uploaded_count}/{min_photos} (minimum required)")
         observation_description = st.text_area(
             "Description",
             value="",
@@ -2508,6 +2494,40 @@ def _render_rwa_placeholder() -> None:
             height=120,
             key="rwa_notes",
         )
+
+    current_visit_photos = [item for item in all_photos if str(item.get('visit_id') or '') == display_visit_id]
+    existing_photo_names = {str(item.get('photo_filename') or '').strip().lower() for item in current_visit_photos}
+
+    with right:
+        metric_left, metric_right = st.columns([0.6, 0.4])
+        with metric_left:
+            st.markdown("<div style='display:flex;align-items:center;gap:12px;margin-top:4px;margin-bottom:10px;'><div style='font-family:Menlo,Monaco,monospace;font-size:13px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.06em;'>Registered photos</div><div style='font-family:Menlo,Monaco,monospace;font-size:22px;font-weight:800;color:#0f172a;'>" + str(len(current_visit_photos)) + "</div></div>", unsafe_allow_html=True)
+        uploaded_files = st.file_uploader(
+            "Upload photos",
+            type=["jpg", "jpeg", "png", "heic", "heif", "webp", "bmp", "tif", "tiff"],
+            accept_multiple_files=True,
+            key="rwa_uploader",
+            label_visibility="collapsed",
+        )
+        uploaded_files = uploaded_files or []
+        uploaded_names = [str(item.name or '').strip() for item in uploaded_files]
+        normalized_names = [name.lower() for name in uploaded_names if name]
+        duplicate_inside_upload = sorted({name for name in normalized_names if normalized_names.count(name) > 1})
+        duplicate_against_existing = sorted({name for name in normalized_names if name in existing_photo_names})
+        has_duplicate_names = bool(duplicate_inside_upload or duplicate_against_existing)
+        uploaded_count = len(uploaded_files)
+        if has_duplicate_names:
+            duplicate_messages = []
+            if duplicate_inside_upload:
+                duplicate_messages.append("duplicated in current upload: " + ", ".join(duplicate_inside_upload))
+            if duplicate_against_existing:
+                duplicate_messages.append("already registered in visit: " + ", ".join(duplicate_against_existing))
+            st.error("Duplicate photo name detected: " + " | ".join(duplicate_messages))
+        elif uploaded_count >= min_photos:
+            st.success(f"Photos: {uploaded_count}/{min_photos}")
+        else:
+            st.error(f"Photos: {uploaded_count}/{min_photos} (minimum required)")
+
         if st.button("Guardar observación", type="primary", key="rwa_save_observation", use_container_width=True):
             if not current_asset_id:
                 st.warning("Select an asset first.")
@@ -2515,6 +2535,8 @@ def _render_rwa_placeholder() -> None:
                 st.warning("The visit id could not be generated yet.")
             elif not observation_display:
                 st.warning("The observation id could not be generated yet.")
+            elif has_duplicate_names:
+                st.warning("Duplicate photo names must be resolved before saving the observation.")
             elif uploaded_count < min_photos:
                 st.warning(f"You must upload at least {min_photos} photo(s) before saving this observation.")
             else:
@@ -2531,21 +2553,16 @@ def _render_rwa_placeholder() -> None:
                     severity_0_5=int(severity),
                     observation_description=observation_description,
                     coordinator_notes=coordinator_notes,
-                    uploaded_files=uploaded_files or [],
+                    uploaded_files=uploaded_files,
                 )
                 st.success(f"Observation saved: {observation_display}")
                 st.session_state[observation_draft_key] = _build_observation_draft_id(display_visit_id)
                 st.rerun()
 
-    with right:
-        st.markdown("#### Photos for current visit")
-        current_visit_photos = [item for item in all_photos if str(item.get('visit_id') or '') == display_visit_id]
-        st.metric("Registered photos", len(current_visit_photos))
-        if current_visit_photos:
-            st.dataframe(current_visit_photos, use_container_width=True, hide_index=True)
-        else:
-            st.info("No RWA photos registered for this visit yet.")
-        st.caption("RWA now uses its own SQLite foundation. This intake flow is no longer tied to Real Estate.")
+    if current_visit_photos:
+        st.dataframe(current_visit_photos, use_container_width=True, hide_index=True)
+    else:
+        st.info("No RWA photos registered for this visit yet.")
 
 
 def _render_legacy_panel_b(context: dict) -> None:
