@@ -374,6 +374,11 @@ def _real_estate_delivery_target_email(cfg) -> str:
     ).strip()
 
 
+def _is_admin_secret_email(cfg: AuthShellConfig, email: str) -> bool:
+    candidate = (email or "").strip().lower()
+    return bool(cfg.admin_email and candidate and candidate == cfg.admin_email.strip().lower())
+
+
 def _send_real_estate_delivery_email(*, target_email: str, subject: str, body: str) -> dict[str, str]:
     smtp_enabled = _secret_bool("SMTP_ENABLED", False)
     smtp_host = _secret_value("SMTP_HOST", "")
@@ -750,8 +755,9 @@ def _render_auth_shell() -> None:
             password = st.text_input(_t("field_password"), type="password", key="login_password")
             if st.button(_t("button_access_workspace"), type="primary"):
                 context = _get_auth_request_context()
-                ip_record = get_ip_control_record(AUTH_ACCESS_SQLITE_PATH, context.ip_public)
-                if ip_is_blocked(ip_record):
+                is_admin_attempt = _is_admin_secret_email(cfg, email)
+                ip_record = None if is_admin_attempt else get_ip_control_record(AUTH_ACCESS_SQLITE_PATH, context.ip_public)
+                if ip_record and ip_is_blocked(ip_record):
                     log_auth_event(
                         AUTH_ACCESS_SQLITE_PATH,
                         user_email=None,
@@ -764,7 +770,7 @@ def _render_auth_shell() -> None:
                     )
                     st.error("This IP is temporarily blocked.")
                     st.stop()
-                if ip_is_in_cooldown(ip_record):
+                if ip_record and ip_is_in_cooldown(ip_record):
                     log_auth_event(
                         AUTH_ACCESS_SQLITE_PATH,
                         user_email=None,
@@ -794,7 +800,7 @@ def _render_auth_shell() -> None:
                 if matched:
                     account_record = get_account_record(AUTH_ACCESS_SQLITE_PATH, matched[1])
                     account_status = str((account_record or {}).get("account_status") or get_account_status(AUTH_ACCESS_SQLITE_PATH, matched[1]))
-                    if is_account_temporarily_locked(account_record):
+                    if (not _is_admin_secret_email(cfg, matched[1])) and is_account_temporarily_locked(account_record):
                         log_auth_event(
                             AUTH_ACCESS_SQLITE_PATH,
                             user_email=matched[1],
@@ -821,7 +827,7 @@ def _render_auth_shell() -> None:
                     else:
                         current_active_sessions = count_active_sessions(AUTH_ACCESS_SQLITE_PATH, user_email=matched[1])
                         max_sessions = _max_active_sessions()
-                        if current_active_sessions >= max_sessions:
+                        if (not _is_admin_secret_email(cfg, matched[1])) and current_active_sessions >= max_sessions:
                             log_auth_event(
                                 AUTH_ACCESS_SQLITE_PATH,
                                 user_email=matched[1],
@@ -836,7 +842,8 @@ def _render_auth_shell() -> None:
                             st.error(f"Session limit reached for this account ({max_sessions}).")
                             st.stop()
                         clear_failed_login_state(AUTH_ACCESS_SQLITE_PATH, user_email=matched[1])
-                        clear_ip_failed_state(AUTH_ACCESS_SQLITE_PATH, ip_public=context.ip_public)
+                        if not _is_admin_secret_email(cfg, matched[1]):
+                            clear_ip_failed_state(AUTH_ACCESS_SQLITE_PATH, ip_public=context.ip_public)
                         session_id = create_auth_session(
                             AUTH_ACCESS_SQLITE_PATH,
                             user_email=matched[1],
@@ -862,6 +869,19 @@ def _render_auth_shell() -> None:
                         st.success("Access granted.")
                         st.rerun()
                 elif cfg.auth_enabled and cfg.has_configured_accounts:
+                    if is_admin_attempt:
+                        log_auth_event(
+                            AUTH_ACCESS_SQLITE_PATH,
+                            user_email=cfg.admin_email.strip().lower() if cfg.admin_email else None,
+                            user_role="admin",
+                            identifier_attempted=email.strip().lower() or None,
+                            event_type="login_failure",
+                            success_flag=False,
+                            failure_reason="invalid_admin_credentials",
+                            context=context,
+                        )
+                        st.error("Invalid administrator credentials.")
+                        st.stop()
                     local_account = get_account_record(AUTH_ACCESS_SQLITE_PATH, email.strip().lower())
                     ip_result = register_failed_ip_attempt(
                         AUTH_ACCESS_SQLITE_PATH,
