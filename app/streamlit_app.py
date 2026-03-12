@@ -17,7 +17,7 @@ from common.security import evaluate_secret_posture, redact_config_for_ui
 from common.services.ai_router import choose_ai_provider
 from common.services.gmail_connector import get_mail_connector_status
 from common.services.github_connector import get_github_connector_status
-from common.services.agent_operations_package import build_agent_operation_aer_package
+from common.services.agent_operations_package import AERSigningConfig, build_agent_operation_aer_package
 from common.services.agent_operations_sqlite import (
     load_agent_operations_snapshot,
     set_agent_operation_decision,
@@ -205,6 +205,19 @@ def _load_auth_shell_config() -> AuthShellConfig:
         user_email=user_email,
         user_password=user_password,
         recovery_notify_email=_secret_value("SANDBOX_RECOVERY_NOTIFY_EMAIL", _secret_value("MAIL_FROM", "")),
+    )
+
+
+def _load_aer_signing_config() -> AERSigningConfig:
+    enabled = _secret_bool("HREVN_SIGNING_ENABLED", False)
+    return AERSigningConfig(
+        enabled=enabled,
+        issuer=_secret_value("HREVN_SIGNING_ISSUER", "H-REVN"),
+        key_id=_secret_value("HREVN_SIGNING_KEY_ID", "hrevn-primary-signing-key-001"),
+        private_key=_secret_value("HREVN_SIGNING_PRIVATE_KEY", ""),
+        verification_url=_secret_value("HREVN_SIGNING_VERIFICATION_URL", "https://hrevn.com/.well-known/hrevn-signing-key.json"),
+        signature_profile=_secret_value("HREVN_SIGNING_PROFILE", "hrevn_signing_v1"),
+        algorithm="ed25519",
     )
 
 
@@ -898,7 +911,8 @@ def render_controlled_actions_vertical() -> None:
 
     rationale_key = f"agent_ops_rationale_{selected['record_id']}"
     rationale = st.session_state.get(rationale_key, selected.get("decision_rationale") or "")
-    package_payload = build_agent_operation_aer_package(selected) if selected["status"] != "pending_review" else None
+    signing_cfg = _load_aer_signing_config()
+    package_payload = build_agent_operation_aer_package(selected, signing_cfg) if selected["status"] != "pending_review" else None
 
     mid_left, mid_center, mid_right = st.columns([1.0, 1.0, 1.0])
     with mid_left:
@@ -947,6 +961,7 @@ def render_controlled_actions_vertical() -> None:
                     {"FIELD": "Seal reference", "VALUE": selected["seal_reference"] or "-"},
                     {"FIELD": "Manifest hash", "VALUE": package_payload["manifest_hash"][:20] + "..."},
                     {"FIELD": "Root hash", "VALUE": package_payload["root_hash"][:20] + "..."},
+                    {"FIELD": "Signature", "VALUE": "Signed" if any(row["artifact"] == "SIGNATURE.json" for row in package_payload["artifacts"]) else "Unsigned demo"},
                     {"FIELD": "Delivery hash", "VALUE": package_payload["zip_sha256"][:20] + "..."},
                     {"FIELD": "Delivery bundle", "VALUE": delivery_bundle_filename},
                     {"FIELD": "ZIP package", "VALUE": package_payload["zip_filename"]},

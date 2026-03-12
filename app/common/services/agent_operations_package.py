@@ -6,7 +6,9 @@ import hashlib
 import io
 import json
 import zipfile
+import base64
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -20,6 +22,21 @@ def _sha256_bytes(data: bytes) -> str:
 
 def _json_bytes(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False).encode("utf-8")
+
+
+def _canonical_json_bytes(payload: dict[str, Any]) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+@dataclass(frozen=True)
+class AERSigningConfig:
+    enabled: bool
+    issuer: str
+    key_id: str
+    private_key: str
+    verification_url: str
+    signature_profile: str = "hrevn_signing_v1"
+    algorithm: str = "ed25519"
 
 
 def _normalize_state(record: dict[str, Any]) -> dict[str, str]:
@@ -113,7 +130,85 @@ def _build_report_pdf(record: dict[str, Any], operation_record: dict[str, Any], 
     return buffer.getvalue()
 
 
-def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
+def _load_ed25519_private_key(private_key_value: str):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    raw = private_key_value.strip()
+    if not raw:
+        raise ValueError("empty signing key")
+    if "BEGIN PRIVATE KEY" in raw:
+        return serialization.load_pem_private_key(raw.encode("utf-8"), password=None)
+    try:
+        return Ed25519PrivateKey.from_private_bytes(bytes.fromhex(raw))
+    except ValueError:
+        pass
+    try:
+        return Ed25519PrivateKey.from_private_bytes(base64.b64decode(raw))
+    except Exception as exc:  # pragma: no cover - defensive parse path
+        raise ValueError("unsupported Ed25519 private key format") from exc
+
+
+def _ed25519_public_key_bytes(public_key) -> bytes:
+    from cryptography.hazmat.primitives import serialization
+
+    return public_key.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+
+
+def _build_signature_payload(
+    aer_id: str,
+    record: dict[str, Any],
+    manifest_hash: str,
+    root_hash: str,
+    signing_config: AERSigningConfig,
+) -> dict[str, Any]:
+    return {
+        "package_family": "hrevn_aer",
+        "bundle_profile": "agent_operation_aer_v1",
+        "aer_id": aer_id,
+        "record_id": record["record_id"],
+        "workflow_id": record.get("workflow_id") or f"WF-{record['record_id']}",
+        "signature_profile": signing_config.signature_profile,
+        "signed_by": signing_config.issuer,
+        "key_id": signing_config.key_id,
+        "signature_algorithm": signing_config.algorithm,
+        "signature_scope": ["manifest.json", "ROOT_HASH_SHA256.txt"],
+        "manifest_hash": manifest_hash,
+        "root_hash": root_hash,
+        "verification_url": signing_config.verification_url,
+    }
+
+
+def _maybe_build_signature_artifact(
+    aer_id: str,
+    record: dict[str, Any],
+    manifest_hash: str,
+    root_hash: str,
+    signing_config: AERSigningConfig | None,
+) -> tuple[dict[str, Any] | None, bytes | None]:
+    if not signing_config or not signing_config.enabled or not signing_config.private_key.strip():
+        return None, None
+
+    private_key = _load_ed25519_private_key(signing_config.private_key)
+    public_key = private_key.public_key()
+    payload = _build_signature_payload(aer_id, record, manifest_hash, root_hash, signing_config)
+    payload_bytes = _canonical_json_bytes(payload)
+    signature_bytes = private_key.sign(payload_bytes)
+    public_key_bytes = _ed25519_public_key_bytes(public_key)
+    signature_artifact = {
+        **payload,
+        "signature_status": "signed",
+        "public_key_fingerprint_sha256": hashlib.sha256(public_key_bytes).hexdigest(),
+        "public_key_base64": base64.b64encode(public_key_bytes).decode("ascii"),
+        "signature_value_base64": base64.b64encode(signature_bytes).decode("ascii"),
+    }
+    return signature_artifact, _json_bytes(signature_artifact)
+
+
+def build_agent_operation_aer_package(record: dict[str, Any], signing_config: AERSigningConfig | None = None) -> dict[str, Any]:
     packaged_at_utc = _utc_now()
     aer_id = f"AER-{record['record_id']}"
     normalized = _normalize_state(record)
@@ -164,6 +259,8 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
     }
     artifacts["agent_operation_review_report.pdf"] = _build_report_pdf(record, operation_record, approval_record, execution_record)
 
+    signing_requested = bool(signing_config and signing_config.enabled and signing_config.private_key.strip())
+
     artifact_catalog = [
         {"artifact": "operation_record.json", "category": "core", "role": "structured_operation_record"},
         {"artifact": "approval_record.json", "category": "core", "role": "human_approval_record"},
@@ -177,6 +274,8 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
         {"artifact": "ROOT_HASH_SHA256.txt", "category": "verification", "role": "package_root_hash"},
         {"artifact": "ROOT_SPEC_AER_V1.txt", "category": "verification", "role": "root_hash_rule"},
     ]
+    if signing_requested:
+        artifact_catalog.append({"artifact": "SIGNATURE.json", "category": "verification", "role": "institutional_signature_record"})
     manifest = {
         "aer_id": aer_id,
         "record_id": record["record_id"],
@@ -187,6 +286,7 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
         "bundle_profile": "agent_operation_aer_v1",
         "verification_model": "ROOT_AER_V1",
         "external_anchor_status": "not_anchored",
+        "signature_status": "signed" if signing_requested else "unsigned_demo",
         "artifact_count": len(artifact_catalog),
         "artifacts": artifact_catalog,
         "authoritative_files": [
@@ -232,6 +332,15 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
         },
         "version": "aer_demo_v1",
     }
+    if signing_requested and signing_config:
+        manifest["signature_profile"] = signing_config.signature_profile
+        manifest["signed_by"] = signing_config.issuer
+        manifest["key_id"] = signing_config.key_id
+        manifest["signature_algorithm"] = signing_config.algorithm
+        manifest["signature_scope"] = ["manifest.json", "ROOT_HASH_SHA256.txt"]
+        manifest["verification_url"] = signing_config.verification_url
+        manifest["authoritative_files"].append("SIGNATURE.json")
+        manifest["checksum_scope"].append("SIGNATURE.json")
     manifest_bytes = _json_bytes(manifest)
     artifacts["manifest.json"] = manifest_bytes
 
@@ -264,6 +373,16 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
         "4. Join lines with '\\n' and do not append a trailing newline.\n"
         "5. SHA-256 that exact text and compare it with ROOT_HASH_SHA256.txt.\n"
     ).encode("utf-8")
+
+    signature_artifact, signature_bytes = _maybe_build_signature_artifact(
+        aer_id,
+        record,
+        _sha256_bytes(manifest_bytes),
+        root_hash,
+        signing_config if signing_requested else None,
+    )
+    if signature_artifact and signature_bytes:
+        artifacts["SIGNATURE.json"] = signature_bytes
 
     checksum_names = manifest["checksum_scope"]
     checksum_rows = [(name, _sha256_bytes(artifacts[name])) for name in checksum_names]
