@@ -96,6 +96,7 @@ from common.services.real_estate_v2_store import (
 from common.services.communications_store import (
     ensure_communications_schema,
     load_communications_snapshot,
+    sync_gmail_inbox,
 )
 from common.services.telegram_connector import (
     get_telegram_connector_status,
@@ -3515,8 +3516,37 @@ def _count_sqlite_rows(db_path: Path, table_name: str) -> int:
 def render_email_panel() -> None:
     st.subheader("Email")
     ensure_communications_schema(COMMUNICATIONS_SQLITE_PATH)
+    cfg = load_common_config()
+    mail_status = get_mail_connector_status(cfg)
+
+    top_left, top_right = st.columns([0.72, 0.28])
+    with top_left:
+        st.dataframe([
+            {"FIELD": "Inbound sync", "VALUE": "ready" if mail_status.inbound_sync_ready else "not_ready"},
+            {"FIELD": "Outbound delivery", "VALUE": "ready" if mail_status.outbound_ready else "not_ready"},
+            {"FIELD": "Preferred channel", "VALUE": mail_status.preferred_channel},
+            {"FIELD": "Recovery-ready", "VALUE": "yes" if mail_status.recovery_ready else "no"},
+            {"FIELD": "Source", "VALUE": str(COMMUNICATIONS_SQLITE_PATH)},
+        ], use_container_width=True, hide_index=True)
+    with top_right:
+        if st.button("Sync Gmail inbox", use_container_width=True, disabled=not mail_status.inbound_sync_ready):
+            try:
+                sync_result = sync_gmail_inbox(
+                    COMMUNICATIONS_SQLITE_PATH,
+                    gmail_client_id=_secret_value("GMAIL_CLIENT_ID", ""),
+                    gmail_client_secret=_secret_value("GMAIL_CLIENT_SECRET", ""),
+                    gmail_refresh_token=_secret_value("GMAIL_REFRESH_TOKEN", ""),
+                    gmail_mailbox_user=_secret_value("GMAIL_MAILBOX_USER", "me") or "me",
+                    gmail_sync_query=_secret_value("GMAIL_SYNC_QUERY", "is:unread") or "is:unread",
+                    max_results=20,
+                )
+                st.success(
+                    f"Gmail sync ok. fetched={sync_result.fetched}, inserted={sync_result.inserted}, support={sync_result.support_tickets}, business={sync_result.sales_leads}, general={sync_result.general_emails}"
+                )
+            except Exception as exc:
+                st.error(f"Gmail sync failed: {exc}")
+
     snapshot = load_communications_snapshot(COMMUNICATIONS_SQLITE_PATH)
-    mail_status = get_mail_connector_status(load_common_config())
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("RECEIVED", snapshot.total_received)
@@ -3525,14 +3555,6 @@ def render_email_panel() -> None:
     c4.metric("BUSINESS", snapshot.total_business)
     c5.metric("GENERAL", snapshot.total_general)
     c6.metric("INBOUND READY", "yes" if mail_status.inbound_sync_ready else "no")
-
-    st.dataframe([
-        {"FIELD": "Inbound sync", "VALUE": "ready" if mail_status.inbound_sync_ready else "not_ready"},
-        {"FIELD": "Outbound delivery", "VALUE": "ready" if mail_status.outbound_ready else "not_ready"},
-        {"FIELD": "Preferred channel", "VALUE": mail_status.preferred_channel},
-        {"FIELD": "Recovery-ready", "VALUE": "yes" if mail_status.recovery_ready else "no"},
-        {"FIELD": "Source", "VALUE": str(COMMUNICATIONS_SQLITE_PATH)},
-    ], use_container_width=True, hide_index=True)
 
     tab_all, tab_support, tab_business, tab_general, tab_outbound = st.tabs(["All", "Support", "Business", "General", "Outbound"])
 
