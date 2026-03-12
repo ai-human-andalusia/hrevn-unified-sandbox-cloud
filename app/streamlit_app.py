@@ -2155,11 +2155,73 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
     observations = context["selected_observations"]
     photos = context["selected_photos"]
     lpi_options = context["lpi_options"]
+    selected_visit = context.get("selected_visit") or {}
+    selected_asset = context.get("selected_asset") or {}
+    all_assets = context.get("all_assets") or []
+    all_visits = context.get("all_visits") or []
+
+    mode_key = f"{key_prefix}_mode"
+    asset_key = f"{key_prefix}_asset"
+    if mode_key not in st.session_state:
+        st.session_state[mode_key] = "existing"
+    if asset_key not in st.session_state:
+        st.session_state[asset_key] = str(selected_asset.get("asset_id") or "")
+
+    header_left, header_btn1, header_btn2 = st.columns([2, 1, 1])
+    with header_left:
+        st.markdown("#### Nueva visita")
+    if header_btn1.button("Nueva visita", key=f"{key_prefix}_new_visit", use_container_width=True):
+        st.session_state[mode_key] = "new_visit"
+        st.session_state[asset_key] = ""
+    if header_btn2.button("Nueva observación", key=f"{key_prefix}_new_observation", use_container_width=True):
+        st.session_state[mode_key] = "new_observation"
+        st.session_state[asset_key] = str(selected_asset.get("asset_id") or "")
+
+    asset_options = {"Select asset": ""}
+    asset_options.update(
+        {
+            f"{item.get('asset_name') or item.get('asset_public_id') or item.get('asset_id')} ({item.get('asset_public_id') or item.get('asset_id')})": str(item.get("asset_id") or "")
+            for item in all_assets
+            if item.get("asset_id")
+        }
+    )
+    asset_labels = list(asset_options.keys())
+    current_asset_id = st.session_state.get(asset_key, "")
+    current_asset_label = next((label for label, value in asset_options.items() if value == current_asset_id), asset_labels[0])
 
     left, right = st.columns(2)
     with left:
-        st.markdown("#### Ficha de observación")
-        if observations:
+        field_a, field_b = st.columns(2)
+        with field_a:
+            chosen_asset_label = st.selectbox(
+                "Asset",
+                asset_labels,
+                index=asset_labels.index(current_asset_label) if current_asset_label in asset_labels else 0,
+                key=f"{key_prefix}_asset_selectbox",
+            )
+            current_asset_id = asset_options[chosen_asset_label]
+            st.session_state[asset_key] = current_asset_id
+
+        current_asset_row = next((item for item in all_assets if str(item.get("asset_id") or "") == current_asset_id), None)
+        asset_visits = [item for item in all_visits if str(item.get("asset_id") or "") == current_asset_id]
+        next_visit_number = len(asset_visits) + 1 if current_asset_id else 1
+        generated_visit_id = f"VIS-{current_asset_id}-{next_visit_number:04d}" if current_asset_id else ""
+        current_visit_id = str(selected_visit.get("visit_id") or "")
+        display_visit_id = generated_visit_id if st.session_state.get(mode_key) in {"new_visit", "new_observation"} else current_visit_id
+
+        with field_b:
+            st.text_input("Número de visita", value=display_visit_id, disabled=True, key=f"{key_prefix}_visit_number")
+
+        if st.session_state.get(mode_key) == "new_observation":
+            next_observation_number = len(observations) + 1
+            st.text_input(
+                "Número de observación",
+                value=f"OBS-{display_visit_id or 'NEW'}-{next_observation_number:03d}",
+                disabled=True,
+                key=f"{key_prefix}_observation_number",
+            )
+            selected_observation = {}
+        elif observations:
             labels = [f"{item.get('record_uuid')} ({item.get('lpi_code') or '-'})" for item in observations]
             selected_label = st.selectbox("Observations in visit", labels, key=f"{key_prefix}_observation")
             record_uuid = selected_label.split(" (")[0]
