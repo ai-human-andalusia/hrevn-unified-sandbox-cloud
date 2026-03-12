@@ -22,6 +22,32 @@ def _json_bytes(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False).encode("utf-8")
 
 
+def _normalize_state(record: dict[str, Any]) -> dict[str, str]:
+    status = str(record.get("status") or "pending_review")
+    human_action = str(record.get("human_action") or "pending")
+
+    if status == "executed_sealed" or human_action == "approved":
+        return {
+            "human_approval_status": "approved",
+            "status": "executed_sealed",
+            "execution_result": "executed_after_human_authorization",
+            "seal_status": "sealed",
+        }
+    if status == "rejected" or human_action == "rejected":
+        return {
+            "human_approval_status": "rejected",
+            "status": "rejected",
+            "execution_result": "blocked_by_human_rejection",
+            "seal_status": "sealed_rejection",
+        }
+    return {
+        "human_approval_status": "pending",
+        "status": "pending_review",
+        "execution_result": "awaiting_human_decision",
+        "seal_status": "not_sealed",
+    }
+
+
 def _build_report_pdf(record: dict[str, Any], operation_record: dict[str, Any], approval_record: dict[str, Any], execution_record: dict[str, Any]) -> bytes:
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
@@ -67,10 +93,7 @@ def _build_report_pdf(record: dict[str, Any], operation_record: dict[str, Any], 
 def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
     generated_at = _utc_now()
     aer_id = f"AER-{record['record_id']}"
-    human_approval_status = {
-        "approved": "approved",
-        "rejected": "rejected",
-    }.get(record.get("human_action"), "pending")
+    normalized = _normalize_state(record)
 
     operation_record = {
         "aer_id": aer_id,
@@ -90,7 +113,7 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
     approval_record = {
         "aer_id": aer_id,
         "record_id": record["record_id"],
-        "human_approval_status": human_approval_status,
+        "human_approval_status": normalized["human_approval_status"],
         "reviewer_name": record.get("reviewer_name") or "Pending reviewer",
         "reviewer_role": record.get("reviewer_role") or "Pending reviewer role",
         "reviewed_at_utc": record.get("reviewed_at_utc") or "",
@@ -100,10 +123,10 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
     execution_record = {
         "aer_id": aer_id,
         "record_id": record["record_id"],
-        "execution_result": record.get("execution_result") or "awaiting_human_decision",
-        "seal_status": record.get("seal_status") or "not_sealed",
+        "execution_result": normalized["execution_result"],
+        "seal_status": normalized["seal_status"],
         "seal_reference": record.get("seal_reference") or "",
-        "status": record.get("status") or "",
+        "status": normalized["status"],
         "generated_at_utc": generated_at,
     }
 
@@ -114,13 +137,15 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
     }
     artifacts["agent_operation_review_report.pdf"] = _build_report_pdf(record, operation_record, approval_record, execution_record)
 
-    artifact_rows = [
-        {
-            "artifact": name,
-            "sha256": _sha256_bytes(content),
-            "size_bytes": len(content),
-        }
-        for name, content in artifacts.items()
+    artifact_catalog = [
+        {"artifact": "operation_record.json", "category": "core", "role": "structured_operation_record"},
+        {"artifact": "approval_record.json", "category": "core", "role": "human_approval_record"},
+        {"artifact": "execution_record.json", "category": "core", "role": "execution_outcome_record"},
+        {"artifact": "agent_operation_review_report.pdf", "category": "core", "role": "human_readable_review_report"},
+        {"artifact": "manifest.json", "category": "control", "role": "package_manifest"},
+        {"artifact": "CHECKSUMS.sha256", "category": "verification", "role": "artifact_hash_list"},
+        {"artifact": "ROOT_HASH_SHA256.txt", "category": "verification", "role": "package_root_hash"},
+        {"artifact": "ROOT_SPEC_AER_V1.txt", "category": "verification", "role": "root_hash_rule"},
     ]
     manifest = {
         "aer_id": aer_id,
@@ -128,21 +153,41 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
         "generated_at_utc": generated_at,
         "workflow_id": operation_record["workflow_id"],
         "package_type": "agent_operation_aer_demo_v1",
-        "artifact_count": len(artifact_rows) + 3,
-        "artifacts": artifact_rows,
+        "artifact_count": len(artifact_catalog),
+        "artifacts": artifact_catalog,
+        "authoritative_files": [item["artifact"] for item in artifact_catalog],
+        "checksum_scope": [
+            "operation_record.json",
+            "approval_record.json",
+            "execution_record.json",
+            "agent_operation_review_report.pdf",
+            "manifest.json",
+            "ROOT_HASH_SHA256.txt",
+            "ROOT_SPEC_AER_V1.txt",
+        ],
+        "root_scope": [
+            "operation_record.json",
+            "approval_record.json",
+            "execution_record.json",
+            "agent_operation_review_report.pdf",
+            "manifest.json",
+        ],
+        "version": "aer_demo_v1",
     }
     manifest_bytes = _json_bytes(manifest)
     artifacts["manifest.json"] = manifest_bytes
-    manifest_hash = _sha256_bytes(manifest_bytes)
 
-    checksum_rows = [(name, _sha256_bytes(content)) for name, content in artifacts.items()]
-    checksums_text = "\n".join(f"{sha}  {name}" for name, sha in sorted(checksum_rows, key=lambda item: item[0])) + "\n"
-    artifacts["CHECKSUMS.sha256"] = checksums_text.encode("utf-8")
-
-    root_basis = "\n".join(f"{name}:{sha}" for name, sha in sorted(checksum_rows, key=lambda item: item[0])).encode("utf-8")
+    root_input_names = manifest["root_scope"]
+    root_hash_pairs = [(name, _sha256_bytes(artifacts[name])) for name in root_input_names]
+    root_basis = "\n".join(f"{name}:{sha}" for name, sha in sorted(root_hash_pairs, key=lambda item: item[0])).encode("utf-8")
     root_hash = _sha256_bytes(root_basis)
     artifacts["ROOT_HASH_SHA256.txt"] = (root_hash + "\n").encode("utf-8")
-    artifacts["ROOT_SPEC_AER_V1.txt"] = b"ROOT = sha256(sorted artifact sha256 pairs excluding CHECKSUMS/ROOT files)\n"
+    artifacts["ROOT_SPEC_AER_V1.txt"] = b"ROOT = sha256(sorted filename:sha256 pairs for root_scope files listed in manifest)\n"
+
+    checksum_names = manifest["checksum_scope"]
+    checksum_rows = [(name, _sha256_bytes(artifacts[name])) for name in checksum_names]
+    checksums_text = "\n".join(f"{sha}  {name}" for name, sha in sorted(checksum_rows, key=lambda item: item[0])) + "\n"
+    artifacts["CHECKSUMS.sha256"] = checksums_text.encode("utf-8")
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -152,7 +197,7 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "aer_id": aer_id,
-        "manifest_hash": manifest_hash,
+        "manifest_hash": _sha256_bytes(manifest_bytes),
         "root_hash": root_hash,
         "artifacts": [{"artifact": name, "sha256": sha, "size_bytes": len(artifacts[name])} for name, sha in sorted(checksum_rows, key=lambda item: item[0])],
         "zip_filename": f"{record['record_id']}_{root_hash}.zip",
