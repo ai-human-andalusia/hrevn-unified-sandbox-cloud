@@ -64,6 +64,7 @@ from common.services.real_estate_ai_review import review_real_estate_certificati
 from common.services.real_estate_v2_store import (
     create_re_v2_account,
     create_re_v2_enterprise,
+    get_re_v2_enterprise_assignment_detail,
     get_re_v2_summary,
     list_re_v2_account_asset_links,
     list_re_v2_accounts,
@@ -2852,7 +2853,19 @@ def _render_real_estate_v2_builder() -> None:
         ])
         with t_enterprises:
             _render_panel_section_title("Recent enterprises")
-            st.dataframe(list_re_v2_enterprises(), use_container_width=True, hide_index=True)
+            enterprise_rows = list_re_v2_enterprises()
+            st.dataframe(enterprise_rows, use_container_width=True, hide_index=True)
+            enterprise_options = {row["enterprise_name"]: row["enterprise_id"] for row in enterprise_rows}
+            if enterprise_options:
+                selected_enterprise_name = st.selectbox(
+                    "Filter by enterprise name",
+                    list(enterprise_options.keys()),
+                    key="re_v2_recent_enterprise_filter",
+                )
+                selected_enterprise_id = enterprise_options[selected_enterprise_name]
+                detail_rows = get_re_v2_enterprise_assignment_detail(selected_enterprise_id)
+                _render_panel_section_title("Enterprise detail")
+                st.dataframe(detail_rows, use_container_width=True, hide_index=True)
         with t_accounts:
             _render_panel_section_title("Recent accounts")
             st.dataframe(list_re_v2_accounts(), use_container_width=True, hide_index=True)

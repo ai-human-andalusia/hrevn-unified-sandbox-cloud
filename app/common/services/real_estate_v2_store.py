@@ -59,6 +59,30 @@ def list_re_v2_enterprises(db_path: Path | None = None) -> list[dict]:
         ).fetchall()
         return [dict(row) for row in rows]
 
+def get_re_v2_enterprise_assignment_detail(enterprise_id: str, db_path: Path | None = None) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+              a.user_email AS property_or_user,
+              COALESCE(json_extract(a.profile_data_json, '$.reference_code'), '') AS user_reference,
+              s.asset_name,
+              s.asset_public_id,
+              COUNT(DISTINCT v.visit_id) AS event_visit_count,
+              COUNT(DISTINCT i.issuance_id) AS certificate_count
+            FROM re_accounts a
+            LEFT JOIN re_account_asset_links l ON l.account_id = a.account_id
+            LEFT JOIN re_assets s ON s.asset_id = l.asset_id
+            LEFT JOIN re_visits v ON v.asset_id = s.asset_id
+            LEFT JOIN re_issuances i ON i.asset_id = s.asset_id AND i.certificate_status = 'issued'
+            WHERE a.enterprise_id = ?
+            GROUP BY a.account_id, s.asset_id
+            ORDER BY a.user_email ASC, s.asset_public_id ASC
+            """,
+            (enterprise_id.strip(),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
 
 def list_re_v2_accounts(db_path: Path | None = None) -> list[dict]:
     with _connect(db_path) as conn:
