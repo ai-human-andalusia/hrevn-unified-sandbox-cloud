@@ -931,6 +931,7 @@ def render_controlled_actions_vertical() -> None:
                     {"FIELD": "Seal reference", "VALUE": "Pending decision"},
                     {"FIELD": "Manifest hash", "VALUE": "Pending generation"},
                     {"FIELD": "Root hash", "VALUE": "Pending generation"},
+                    {"FIELD": "Delivery hash", "VALUE": "Pending generation"},
                     {"FIELD": "ZIP package", "VALUE": "Pending generation"},
                 ],
                 use_container_width=True,
@@ -943,6 +944,7 @@ def render_controlled_actions_vertical() -> None:
                     {"FIELD": "Seal reference", "VALUE": selected["seal_reference"] or "-"},
                     {"FIELD": "Manifest hash", "VALUE": package_payload["manifest_hash"][:20] + "..."},
                     {"FIELD": "Root hash", "VALUE": package_payload["root_hash"][:20] + "..."},
+                    {"FIELD": "Delivery hash", "VALUE": package_payload["zip_sha256"][:20] + "..."},
                     {"FIELD": "ZIP package", "VALUE": package_payload["zip_filename"]},
                 ],
                 use_container_width=True,
@@ -990,6 +992,13 @@ def render_controlled_actions_vertical() -> None:
                 data=package_payload["zip_bytes"],
                 file_name=package_payload["zip_filename"],
                 mime="application/zip",
+                use_container_width=True,
+            )
+            st.download_button(
+                "Export delivery seal (.sha256.txt)",
+                data=package_payload["delivery_seal_bytes"],
+                file_name=package_payload["delivery_seal_filename"],
+                mime="text/plain",
                 use_container_width=True,
             )
 
