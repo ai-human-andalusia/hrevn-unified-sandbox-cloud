@@ -199,10 +199,6 @@ def _render_auth_shell() -> None:
     _init_auth_state()
 
     if st.session_state.get("auth_logged_in"):
-        role = st.session_state.get("auth_role", "guest")
-        email = st.session_state.get("auth_email", "")
-        st.sidebar.markdown("### Session")
-        st.sidebar.write({"role": role, "email": email, "mode": "documentary_shell"})
         if st.sidebar.button("Log out"):
             _logout()
             st.rerun()
