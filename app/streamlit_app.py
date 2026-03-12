@@ -2151,7 +2151,7 @@ def _render_real_estate_workspace(snapshot, context: dict, workspace: dict | Non
     )
 
 
-def _render_legacy_panel_a(context: dict) -> None:
+def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> None:
     observations = context["selected_observations"]
     photos = context["selected_photos"]
     lpi_options = context["lpi_options"]
@@ -2161,7 +2161,7 @@ def _render_legacy_panel_a(context: dict) -> None:
         st.markdown("#### Ficha de observación")
         if observations:
             labels = [f"{item.get('record_uuid')} ({item.get('lpi_code') or '-'})" for item in observations]
-            selected_label = st.selectbox("Observations in visit", labels, key="legacy_a_observation")
+            selected_label = st.selectbox("Observations in visit", labels, key=f"{key_prefix}_observation")
             record_uuid = selected_label.split(" (")[0]
             selected_observation = next(
                 (item for item in observations if item.get("record_uuid") == record_uuid),
@@ -2178,7 +2178,7 @@ def _render_legacy_panel_a(context: dict) -> None:
             options=lpi_options or [""],
             index=lpi_index if lpi_options else 0,
             disabled=True,
-            key="legacy_a_lpi",
+            key=f"{key_prefix}_lpi",
         )
         severity = int(selected_observation.get("severity_0_5") or 0)
         st.selectbox(
@@ -2186,7 +2186,7 @@ def _render_legacy_panel_a(context: dict) -> None:
             options=[0, 1, 2, 3, 4, 5],
             index=[0, 1, 2, 3, 4, 5].index(severity),
             disabled=True,
-            key="legacy_a_severity",
+            key=f"{key_prefix}_severity",
         )
         min_photos = 3 if severity >= 3 else 1
         st.info(f"Legacy auto rule: minimum photos required = {min_photos}")
@@ -2195,14 +2195,14 @@ def _render_legacy_panel_a(context: dict) -> None:
             value=str(selected_observation.get("observation_description") or ""),
             height=140,
             disabled=True,
-            key="legacy_a_description",
+            key=f"{key_prefix}_description",
         )
         st.text_area(
             "Coordinator notes",
             value=str(selected_observation.get("coordinator_notes") or ""),
             height=120,
             disabled=True,
-            key="legacy_a_notes",
+            key=f"{key_prefix}_notes",
         )
 
     with right:
@@ -2220,7 +2220,7 @@ def _render_legacy_panel_a(context: dict) -> None:
             type=["jpg", "jpeg", "png"],
             accept_multiple_files=True,
             disabled=True,
-            key="legacy_a_uploader",
+            key=f"{key_prefix}_uploader",
         )
         st.caption("Upload is disabled here. This panel is a visual recovery of the old operational layout.")
 
@@ -2758,7 +2758,7 @@ def render_real_estate_vertical() -> None:
         with tab_v2:
             _render_real_estate_v2_builder()
         with tab_a:
-            _render_legacy_panel_a(context)
+            _render_legacy_panel_a(context, key_prefix="legacy_a_admin")
         with tab_b:
             _render_legacy_panel_b(context)
         with tab_c:
@@ -3526,7 +3526,7 @@ def main() -> None:
                     selected_visit = visit_ids[0]
                     st.session_state["real_estate_selected_visit"] = selected_visit
                 rwa_context = _prepare_real_estate_context(rwa_snapshot, selected_visit)
-                _render_legacy_panel_a(rwa_context)
+                _render_legacy_panel_a(rwa_context, key_prefix="legacy_a_rwa")
             else:
                 st.info("No Real Estate visits available yet.")
     with tab_arquitectura_status:
