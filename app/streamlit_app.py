@@ -3706,33 +3706,6 @@ def render_graphic_evidence_vertical() -> None:
         st.dataframe(case_rows, use_container_width=True, hide_index=True)
 
 
-def render_email_panel() -> None:
-    st.subheader("Email")
-    rows = _load_legacy_email_rows()
-    support = [r for r in rows if r["classification"] == "support"]
-    business = [r for r in rows if r["classification"] == "business"]
-    general = [r for r in rows if r["classification"] == "general"]
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("RECEIVED", len(rows))
-    c2.metric("SUPPORT", len(support))
-    c3.metric("BUSINESS", len(business))
-    c4.metric("GENERAL", len(general))
-    tab_all, tab_support, tab_business, tab_general = st.tabs(["All", "Support", "Business", "General"])
-    def _render_email_rows(items: list[dict]) -> None:
-        st.dataframe([
-            {"TO": r["to"], "SUBJECT": r["subject"], "CLASS": r["classification"], "ATTACH": r["attachments"]}
-            for r in items
-        ], use_container_width=True, hide_index=True)
-    with tab_all:
-        _render_email_rows(rows)
-    with tab_support:
-        _render_email_rows(support)
-    with tab_business:
-        _render_email_rows(business)
-    with tab_general:
-        _render_email_rows(general)
-
-
 def render_genius_operations_placeholder() -> None:
     st.subheader("GENIUS Operations")
     st.info("No recovered panel is linked here yet. This vertical remains pending first operational draft.")
