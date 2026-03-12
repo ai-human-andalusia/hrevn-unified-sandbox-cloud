@@ -889,7 +889,15 @@ def render_controlled_actions_vertical() -> None:
                 {"FIELD": "Operation", "VALUE": selected["intent"]},
                 {"FIELD": "Tool", "VALUE": selected["tool_name"]},
                 {"FIELD": "Review reason", "VALUE": selected["review_reason"]},
+                {"FIELD": "Workflow ID", "VALUE": selected.get("workflow_id") or "-"},
+                {"FIELD": "Agent role", "VALUE": selected.get("agent_role") or "-"},
             ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        _render_panel_section_title("Operation Parameters")
+        st.dataframe(
+            [{"PARAMETER": row["field"], "VALUE": row["value"], "TYPE": row["type"]} for row in selected["parameters"]],
             use_container_width=True,
             hide_index=True,
         )
@@ -898,71 +906,23 @@ def render_controlled_actions_vertical() -> None:
     rationale = st.session_state.get(rationale_key, selected.get("decision_rationale") or "")
     package_payload = build_agent_operation_aer_package(selected) if selected["status"] != "pending_review" else None
 
-    row_bottom_a, row_bottom_b = st.columns([0.95, 1.05])
-    with row_bottom_a:
+    package_payload = build_agent_operation_aer_package(selected) if selected["status"] != "pending_review" else None
+
+    mid_left, mid_right = st.columns([1.0, 1.0])
+    with mid_left:
         _render_panel_section_title("Human Authorization")
         st.dataframe(
             [
                 {"CONTROL": "Decision", "STATE": selected["human_action"].replace("_", " ").title()},
                 {"CONTROL": "Reviewer", "STATE": selected.get("reviewer_name") or "Pending reviewer"},
                 {"CONTROL": "Reviewer role", "STATE": selected.get("reviewer_role") or "Pending reviewer role"},
-                {"CONTROL": "Seal status", "STATE": selected["seal_status"].replace("_", " ").title()},
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-        reviewer_name = st.session_state.get("auth_email") or "admin@hrevn.local"
-        reviewer_role = "Administrator" if st.session_state.get("auth_role") == "admin" else "Operator"
-        if selected["status"] == "pending_review":
-            if st.button("Authorize and execute", type="primary", use_container_width=True, key=f"approve_{selected['record_id']}"):
-                set_agent_operation_decision(
-                    AGENT_OPERATIONS_SQLITE_PATH,
-                    selected["record_id"],
-                    "approved",
-                    reviewer_name=reviewer_name,
-                    reviewer_role=reviewer_role,
-                    rationale=st.session_state.get(rationale_key, ""),
-                )
-                st.rerun()
-            if st.button("Reject", use_container_width=True, key=f"reject_{selected['record_id']}"):
-                current_rationale = st.session_state.get(rationale_key, "")
-                if not current_rationale.strip():
-                    st.warning("Reject requires a short rationale.")
-                else:
-                    set_agent_operation_decision(
-                        AGENT_OPERATIONS_SQLITE_PATH,
-                        selected["record_id"],
-                        "rejected",
-                        reviewer_name=reviewer_name,
-                        reviewer_role=reviewer_role,
-                        rationale=current_rationale,
-                    )
-                    st.rerun()
-        elif selected["status"] == "executed_sealed":
-            st.success("Operation authorized, executed and sealed.")
-        else:
-            st.error("Operation rejected. Rejection record sealed.")
-
-    with row_bottom_b:
-        _render_panel_section_title("Operation Parameters")
-        st.dataframe(
-            [{"PARAMETER": row["field"], "VALUE": row["value"], "TYPE": row["type"]} for row in selected["parameters"]],
-            use_container_width=True,
-            hide_index=True,
-        )
-        st.dataframe(
-            [
-                {"FIELD": "Workflow ID", "VALUE": selected.get("workflow_id") or "-"},
-                {"FIELD": "Agent role", "VALUE": selected.get("agent_role") or "-"},
-                {"FIELD": "Approval required", "VALUE": "Yes" if selected.get("human_approval_required") else "No"},
-                {"FIELD": "Execution result", "VALUE": selected.get("execution_result") or "-"},
+                {"CONTROL": "Approval required", "STATE": "Yes" if selected.get("human_approval_required") else "No"},
             ],
             use_container_width=True,
             hide_index=True,
         )
 
-    exec_left, exec_mid, exec_right = st.columns([1.0, 1.45, 1.0])
-    with exec_left:
+    with mid_right:
         _render_panel_section_title("Execution Record")
         if package_payload is None:
             st.dataframe(
@@ -989,7 +949,13 @@ def render_controlled_actions_vertical() -> None:
                 hide_index=True,
             )
 
-    with exec_mid:
+    rationale_key = f"agent_ops_rationale_{selected['record_id']}"
+    current_rationale = st.session_state.get(rationale_key, selected.get("decision_rationale") or "")
+    reviewer_name = st.session_state.get("auth_email") or "admin@hrevn.local"
+    reviewer_role = "Administrator" if st.session_state.get("auth_role") == "admin" else "Operator"
+
+    lower_left, lower_right = st.columns([2.0, 1.0])
+    with lower_left:
         _render_panel_section_title("Artifacts")
         if package_payload is None:
             pending_artifacts = [
@@ -1027,16 +993,45 @@ def render_controlled_actions_vertical() -> None:
                 use_container_width=True,
             )
 
-    with exec_right:
+    with lower_right:
         _render_panel_section_title("Decision Rationale")
         st.text_area(
             "Decision rationale",
-            value=rationale,
+            value=current_rationale,
             key=rationale_key,
-            height=220,
+            height=210,
             label_visibility="collapsed",
             placeholder="Add a brief rationale for approval or rejection.",
         )
+        if selected["status"] == "pending_review":
+            if st.button("Authorize and execute", type="primary", use_container_width=True, key=f"approve_{selected['record_id']}"):
+                set_agent_operation_decision(
+                    AGENT_OPERATIONS_SQLITE_PATH,
+                    selected["record_id"],
+                    "approved",
+                    reviewer_name=reviewer_name,
+                    reviewer_role=reviewer_role,
+                    rationale=st.session_state.get(rationale_key, ""),
+                )
+                st.rerun()
+            if st.button("Reject", use_container_width=True, key=f"reject_{selected['record_id']}"):
+                current_rationale = st.session_state.get(rationale_key, "")
+                if not current_rationale.strip():
+                    st.warning("Reject requires a short rationale.")
+                else:
+                    set_agent_operation_decision(
+                        AGENT_OPERATIONS_SQLITE_PATH,
+                        selected["record_id"],
+                        "rejected",
+                        reviewer_name=reviewer_name,
+                        reviewer_role=reviewer_role,
+                        rationale=current_rationale,
+                    )
+                    st.rerun()
+        elif selected["status"] == "executed_sealed":
+            st.success("Operation authorized, executed and sealed.")
+        else:
+            st.error("Operation rejected. Rejection record sealed.")
 
 def render_real_estate_vertical() -> None:
     st.subheader("Real Estate Vertical")
