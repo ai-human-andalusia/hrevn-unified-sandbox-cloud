@@ -3614,14 +3614,6 @@ def main() -> None:
 
     target = st.session_state.get("main_tab_target")
 
-    if target == "agent_operations":
-        render_controlled_actions_vertical()
-        return
-
-    if target == "real_estate":
-        render_real_estate_vertical()
-        return
-
     if target == "gov_photovoltaic":
         render_gov_photovoltaic_vertical()
         return
