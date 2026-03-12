@@ -6,7 +6,7 @@ import hmac
 import secrets
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,19 @@ def _random_token() -> str:
 
 def _utc_epoch() -> int:
     return int(datetime.now(timezone.utc).timestamp())
+
+
+def _parse_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _utc_after_seconds(seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=max(0, seconds))).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _password_material(password: str, salt_b64: str | None = None) -> tuple[str, str]:
@@ -428,7 +441,26 @@ def get_account_record(db_path: Path, user_email: str) -> dict[str, Any] | None:
             "SELECT * FROM auth_accounts WHERE lower(user_email)=lower(?)",
             (user_email,),
         ).fetchone()
-    return dict(row) if row else None
+        if row is None:
+            return None
+        record = dict(row)
+        lockout_until = _parse_utc(str(record.get("lockout_until_utc") or ""))
+        if lockout_until and lockout_until <= datetime.now(timezone.utc):
+            conn.execute(
+                '''
+                UPDATE auth_accounts
+                SET failed_login_count=0,
+                    last_failed_login_at_utc=NULL,
+                    lockout_until_utc=NULL,
+                    updated_at_utc=?
+                WHERE lower(user_email)=lower(?)
+                ''',
+                (_utc_now(), user_email),
+            )
+            record["failed_login_count"] = 0
+            record["last_failed_login_at_utc"] = None
+            record["lockout_until_utc"] = None
+    return record
 
 
 def get_ip_control_record(db_path: Path, ip_public: str) -> dict[str, Any] | None:
@@ -438,10 +470,55 @@ def get_ip_control_record(db_path: Path, ip_public: str) -> dict[str, Any] | Non
             "SELECT * FROM auth_ip_controls WHERE ip_public=?",
             (ip_public,),
         ).fetchone()
-    return dict(row) if row else None
+        if row is None:
+            return None
+        record = dict(row)
+        cooldown_until = _parse_utc(str(record.get("cooldown_until_utc") or ""))
+        blocked_until = _parse_utc(str(record.get("blocked_until_utc") or ""))
+        now = datetime.now(timezone.utc)
+        if blocked_until and blocked_until <= now:
+            conn.execute(
+                '''
+                UPDATE auth_ip_controls
+                SET blocked_until_utc=NULL,
+                    block_reason=NULL,
+                    updated_at_utc=?
+                WHERE ip_public=?
+                ''',
+                (_utc_now(), ip_public),
+            )
+            record["blocked_until_utc"] = None
+            record["block_reason"] = None
+            blocked_until = None
+        if cooldown_until and cooldown_until <= now:
+            conn.execute(
+                '''
+                UPDATE auth_ip_controls
+                SET failed_login_count=0,
+                    last_failed_login_at_utc=NULL,
+                    cooldown_until_utc=NULL,
+                    updated_at_utc=?
+                WHERE ip_public=?
+                ''',
+                (_utc_now(), ip_public),
+            )
+            record["failed_login_count"] = 0
+            record["last_failed_login_at_utc"] = None
+            record["cooldown_until_utc"] = None
+    return record
 
 
 def register_failed_login(db_path: Path, *, user_email: str) -> dict[str, Any] | None:
+    return register_failed_login_with_window(db_path, user_email=user_email, lockout_threshold=5, lockout_seconds=900)
+
+
+def register_failed_login_with_window(
+    db_path: Path,
+    *,
+    user_email: str,
+    lockout_threshold: int,
+    lockout_seconds: int,
+) -> dict[str, Any] | None:
     ensure_auth_access_db(db_path)
     now = _utc_now()
     with _connect(db_path) as conn:
@@ -452,17 +529,17 @@ def register_failed_login(db_path: Path, *, user_email: str) -> dict[str, Any] |
         if row is None:
             return None
         failed_count = int(row["failed_login_count"] or 0) + 1
-        lockout_until = now if failed_count >= 5 else None
+        lockout_until = _utc_after_seconds(lockout_seconds) if failed_count >= lockout_threshold else None
         conn.execute(
             '''
             UPDATE auth_accounts
             SET failed_login_count=?,
                 last_failed_login_at_utc=?,
-                lockout_until_utc=CASE WHEN ?>=5 THEN ? ELSE lockout_until_utc END,
+                lockout_until_utc=CASE WHEN ?>=? THEN ? ELSE lockout_until_utc END,
                 updated_at_utc=?
             WHERE lower(user_email)=lower(?)
             ''',
-            (failed_count, now, failed_count, lockout_until, now, user_email),
+            (failed_count, now, failed_count, lockout_threshold, lockout_until, now, user_email),
         )
     return get_account_record(db_path, user_email)
 
@@ -473,6 +550,8 @@ def register_failed_ip_attempt(
     ip_public: str,
     cooldown_threshold: int,
     block_threshold: int,
+    cooldown_seconds: int,
+    block_seconds: int,
 ) -> dict[str, Any]:
     ensure_auth_access_db(db_path)
     now = _utc_now()
@@ -482,8 +561,8 @@ def register_failed_ip_attempt(
             (ip_public,),
         ).fetchone()
         failed_count = int(row["failed_login_count"] or 0) + 1 if row else 1
-        cooldown_until = now if failed_count >= cooldown_threshold else None
-        blocked_until = now if failed_count >= block_threshold else None
+        cooldown_until = _utc_after_seconds(cooldown_seconds) if failed_count >= cooldown_threshold else None
+        blocked_until = _utc_after_seconds(block_seconds) if failed_count >= block_threshold else None
         block_reason = "too_many_failed_attempts" if failed_count >= block_threshold else None
         conn.execute(
             '''

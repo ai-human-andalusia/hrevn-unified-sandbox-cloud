@@ -37,6 +37,7 @@ from common.services.auth_access_sqlite import (
     log_auth_event,
     log_auth_notification_event,
     register_failed_login,
+    register_failed_login_with_window,
     register_failed_ip_attempt,
     reactivate_account,
     revoke_all_active_sessions_for_user,
@@ -398,6 +399,18 @@ def _ip_block_threshold() -> int:
     return _secret_int("SANDBOX_IP_BLOCK_THRESHOLD", 8)
 
 
+def _user_lockout_seconds() -> int:
+    return _secret_int("SANDBOX_USER_LOCKOUT_SECONDS", 900)
+
+
+def _ip_cooldown_seconds() -> int:
+    return _secret_int("SANDBOX_IP_COOLDOWN_SECONDS", 600)
+
+
+def _ip_block_seconds() -> int:
+    return _secret_int("SANDBOX_IP_BLOCK_SECONDS", 1800)
+
+
 def _send_telegram_security_alert(event_type: str, message: str) -> None:
     cfg = load_common_config()
     telegram_status = get_telegram_connector_status(cfg)
@@ -612,9 +625,16 @@ def _render_auth_shell() -> None:
                         ip_public=context.ip_public,
                         cooldown_threshold=_ip_cooldown_threshold(),
                         block_threshold=_ip_block_threshold(),
+                        cooldown_seconds=_ip_cooldown_seconds(),
+                        block_seconds=_ip_block_seconds(),
                     )
                     if local_account:
-                        updated = register_failed_login(AUTH_ACCESS_SQLITE_PATH, user_email=email.strip().lower())
+                        updated = register_failed_login_with_window(
+                            AUTH_ACCESS_SQLITE_PATH,
+                            user_email=email.strip().lower(),
+                            lockout_threshold=5,
+                            lockout_seconds=_user_lockout_seconds(),
+                        )
                         failure_reason = "invalid_credentials_or_password"
                         if is_account_temporarily_locked(updated):
                             failure_reason = "temporary_lockout"
