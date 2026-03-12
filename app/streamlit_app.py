@@ -2979,19 +2979,24 @@ def _render_real_estate_v2_builder() -> None:
                     enterprise_label = str(selected_rows[0].get("enterprise_name") or "Enterprise")
                     branch_cards = "".join(
                         f"""
-                        <div style='display:grid;grid-template-columns:minmax(180px,1fr) 48px minmax(220px,1fr);gap:10px;align-items:center;margin-top:10px;'>
-                          <div style='background:#ffffff;border:1px solid #bbf7d0;border-radius:10px;padding:10px;'>
-                            <div style='font-family:Menlo,Monaco,monospace;font-size:14px;font-weight:700;color:#0f172a;'>{row.get('property_or_user','')}</div>
-                            <div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;'>Reference: {row.get('user_reference') or '-'}</div>
+                        <div style='display:grid;grid-template-columns:54px minmax(220px,1fr) 54px minmax(240px,1fr);gap:10px;align-items:center;margin-top:10px;'>
+                          <div style='display:flex;align-items:center;justify-content:center;height:100%;'>
+                            <div style='position:relative;width:100%;height:2px;background:#64748b;'>
+                              <div style='position:absolute;right:-1px;top:-4px;width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:8px solid #64748b;'></div>
+                            </div>
+                          </div>
+                          <div style='background:#ffffff;border:1px solid #bbf7d0;border-radius:10px;padding:10px;min-width:0;'>
+                            <div style='font-family:Menlo,Monaco,monospace;font-size:14px;font-weight:700;color:#0f172a;overflow-wrap:anywhere;word-break:break-word;'>{row.get('property_or_user','')}</div>
+                            <div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;margin-top:4px;overflow-wrap:anywhere;word-break:break-word;'>Reference: {row.get('user_reference') or '-'}</div>
                           </div>
                           <div style='display:flex;align-items:center;justify-content:center;height:100%;'>
                             <div style='position:relative;width:100%;height:2px;background:#94a3b8;'>
                               <div style='position:absolute;right:-1px;top:-4px;width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:8px solid #94a3b8;'></div>
                             </div>
                           </div>
-                          <div style='background:#ffffff;border:1px solid #fde68a;border-radius:10px;padding:10px;'>
-                            <div style='font-family:Menlo,Monaco,monospace;font-size:14px;font-weight:700;color:#0f172a;'>{row.get('asset_name','')}</div>
-                            <div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;'>Reference: {row.get('asset_public_id') or '-'}</div>
+                          <div style='background:#ffffff;border:1px solid #fde68a;border-radius:10px;padding:10px;min-width:0;'>
+                            <div style='font-family:Menlo,Monaco,monospace;font-size:14px;font-weight:700;color:#0f172a;overflow-wrap:anywhere;word-break:break-word;'>{row.get('asset_name','')}</div>
+                            <div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;margin-top:4px;overflow-wrap:anywhere;word-break:break-word;'>Reference: {row.get('asset_public_id') or '-'}</div>
                             <div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#475569;margin-top:4px;'>Events: {int(row.get('event_visit_count') or 0)} | Certificates: {int(row.get('certificate_count') or 0)}</div>
                           </div>
                         </div>
@@ -3002,16 +3007,11 @@ def _render_real_estate_v2_builder() -> None:
                     total_certs = sum(int(row.get("certificate_count") or 0) for row in selected_rows)
                     relationship_html = f"""
                     <div style='width:100%;margin-top:14px;border:1px solid #d8e1e8;border-radius:14px;background:#ffffff;padding:16px;'>
-                      <div style='display:grid;grid-template-columns:minmax(220px,280px) 64px minmax(520px,1fr) minmax(180px,220px);gap:14px;align-items:flex-start;'>
+                      <div style='display:grid;grid-template-columns:minmax(220px,280px) minmax(620px,1fr) minmax(180px,220px);gap:14px;align-items:flex-start;'>
                         <div style='background:#dbeafe;border:1px solid #93c5fd;border-radius:12px;padding:14px;'>
                           <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#1e3a8a;'>Enterprise</div>
-                          <div style='font-family:Menlo,Monaco,monospace;font-size:18px;font-weight:700;color:#0f172a;margin-top:8px;'>{enterprise_label}</div>
+                          <div style='font-family:Menlo,Monaco,monospace;font-size:18px;font-weight:700;color:#0f172a;margin-top:8px;overflow-wrap:anywhere;word-break:break-word;'>{enterprise_label}</div>
                           <div style='font-family:Menlo,Monaco,monospace;font-size:12px;color:#334155;margin-top:8px;'>Branches shown: {len(selected_rows)}</div>
-                        </div>
-                        <div style='display:flex;align-items:center;justify-content:center;min-height:100px;'>
-                          <div style='position:relative;width:100%;height:2px;background:#64748b;'>
-                            <div style='position:absolute;right:-1px;top:-4px;width:0;height:0;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:8px solid #64748b;'></div>
-                          </div>
                         </div>
                         <div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px;'>
                           <div style='font-family:Menlo,Monaco,monospace;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#334155;'>Enterprise branches</div>
