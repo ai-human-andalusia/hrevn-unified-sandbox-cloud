@@ -55,7 +55,7 @@ def get_re_v2_summary(db_path: Path | None = None) -> dict:
 def list_re_v2_enterprises(db_path: Path | None = None) -> list[dict]:
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT enterprise_id, enterprise_name, enterprise_type, contact_email, contact_phone, created_at_utc FROM re_enterprises ORDER BY created_at_utc DESC LIMIT 50"
+            "SELECT enterprise_id, enterprise_name, enterprise_type, contact_email, contact_phone, enterprise_data_json, created_at_utc FROM re_enterprises ORDER BY created_at_utc DESC LIMIT 50"
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -95,7 +95,21 @@ def list_re_v2_accounts(db_path: Path | None = None) -> list[dict]:
 def list_re_v2_assets(db_path: Path | None = None) -> list[dict]:
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT asset_id, asset_public_id, asset_name, asset_type, city, province, enterprise_id, asset_status, created_at_utc FROM re_assets ORDER BY created_at_utc DESC LIMIT 50"
+            "SELECT asset_id, asset_public_id, asset_name, asset_type, city, province, enterprise_id, asset_status, asset_data_json, created_at_utc FROM re_assets ORDER BY created_at_utc DESC LIMIT 50"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def list_re_v2_assets_for_enterprise(enterprise_id: str, db_path: Path | None = None) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT asset_id, asset_public_id, asset_name, asset_type, city, province, enterprise_id, asset_status, asset_data_json, created_at_utc
+            FROM re_assets
+            WHERE enterprise_id = ?
+            ORDER BY created_at_utc DESC
+            """,
+            (enterprise_id.strip(),),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -320,6 +334,7 @@ def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
             'enterprise_type': 'real_estate',
             'contact_email': 'ops@andaluciabuildingservices.demo',
             'contact_phone': '+34 600 100 100',
+            'enterprise_data': {'asset_category': 'residential', 'portfolio_segment': 'Premium Rentals'},
             'accounts': [
                 {
                     'user_email': 'laura.adminfincas@andaluciabuildingservices.demo',
@@ -345,23 +360,23 @@ def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
             'assets': [
                 {
                     'asset_public_id': 'RE2-PUB-0001',
-                    'asset_type': 'apartment_block',
+                    'asset_type': 'residential',
                     'asset_name': 'Residencial Aljarafe I',
                     'address_line': 'Calle Azahar 14',
                     'city': 'Tomares',
                     'province': 'Sevilla',
                     'postal_code': '41940',
-                    'asset_data': {'community_name': 'Residencial Aljarafe', 'building_block': 'Bloque A'},
+                    'asset_data': {'community_name': 'Residencial Aljarafe', 'building_block': 'Bloque A', 'portfolio_segment': 'Premium Rentals', 'property_reference_code': 'RE2-PUB-0001'},
                 },
                 {
                     'asset_public_id': 'RE2-PUB-0002',
-                    'asset_type': 'rental_apartment',
+                    'asset_type': 'residential',
                     'asset_name': 'Apartamento Piloto 2B',
                     'address_line': 'Avenida del Olivo 21',
                     'city': 'Mairena del Aljarafe',
                     'province': 'Sevilla',
                     'postal_code': '41927',
-                    'asset_data': {'occupancy_status': 'vacant', 'portfolio_segment': 'Premium Rentals'},
+                    'asset_data': {'occupancy_status': 'vacant', 'portfolio_segment': 'Premium Rentals', 'property_reference_code': 'RE2-PUB-0002'},
                 },
             ],
         },
@@ -370,6 +385,7 @@ def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
             'enterprise_type': 'real_estate',
             'contact_email': 'ops@iberiaportfolio.demo',
             'contact_phone': '+34 600 200 200',
+            'enterprise_data': {'asset_category': 'tertiary', 'portfolio_segment': 'Corporate Lets'},
             'accounts': [
                 {
                     'user_email': 'marta.adminfincas@iberiaportfolio.demo',
@@ -395,23 +411,23 @@ def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
             'assets': [
                 {
                     'asset_public_id': 'RE2-PUB-0003',
-                    'asset_type': 'mixed_use_building',
+                    'asset_type': 'tertiary',
                     'asset_name': 'Edificio Rioja 8',
                     'address_line': 'Calle Rioja 8',
                     'city': 'Sevilla',
                     'province': 'Sevilla',
                     'postal_code': '41001',
-                    'asset_data': {'community_name': 'Rioja 8', 'building_block': 'Principal'},
+                    'asset_data': {'community_name': 'Rioja 8', 'building_block': 'Principal', 'portfolio_segment': 'Corporate Lets', 'property_reference_code': 'RE2-PUB-0003'},
                 },
                 {
                     'asset_public_id': 'RE2-PUB-0004',
-                    'asset_type': 'managed_flat',
+                    'asset_type': 'tertiary',
                     'asset_name': 'Corporate Flat Nervion',
                     'address_line': 'Calle Luis de Morales 12',
                     'city': 'Sevilla',
                     'province': 'Sevilla',
                     'postal_code': '41018',
-                    'asset_data': {'occupancy_status': 'occupied', 'portfolio_segment': 'Corporate Lets'},
+                    'asset_data': {'occupancy_status': 'occupied', 'portfolio_segment': 'Corporate Lets', 'property_reference_code': 'RE2-PUB-0004'},
                 },
             ],
         },
@@ -426,7 +442,7 @@ def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
             enterprise_type=pack['enterprise_type'],
             contact_email=pack['contact_email'],
             contact_phone=pack['contact_phone'],
-            enterprise_data={},
+            enterprise_data=pack.get('enterprise_data', {}),
             db_path=target,
         )
         enterprise_ids.append(enterprise_id)
@@ -482,4 +498,3 @@ def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
                 visit_data={'seeded_demo': True, 'workflow_note': 'Seeded V2 demo visit'},
                 db_path=target,
             )
-

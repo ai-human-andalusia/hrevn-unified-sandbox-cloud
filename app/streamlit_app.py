@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 import pandas as pd
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,12 +65,15 @@ from common.services.real_estate_sqlite import (
 from common.services.real_estate_ai_review import review_real_estate_certification
 from common.services.real_estate_v2_store import (
     create_re_v2_account,
+    create_re_v2_account_asset_link,
+    create_re_v2_asset,
     create_re_v2_enterprise,
     get_re_v2_enterprise_assignment_detail,
     get_re_v2_summary,
     list_re_v2_accounts,
     list_re_v2_asset_demands_rows,
     list_re_v2_assets,
+    list_re_v2_assets_for_enterprise,
     list_re_v2_enterprises,
     list_re_v2_visits,
     reset_and_seed_re_v2_demo,
@@ -2786,6 +2790,16 @@ def _render_real_estate_v2_builder() -> None:
 
     with tab_account:
         enterprises = list_re_v2_enterprises()
+        enterprise_rows_by_id = {row["enterprise_id"]: row for row in enterprises}
+        enterprise_options = {"Standalone / no enterprise": ""}
+        enterprise_options.update({f"{row['enterprise_name']} ({row['enterprise_id']})": row['enterprise_id'] for row in enterprises})
+        asset_category_options = [
+            "residential",
+            "tertiary",
+            "industrial",
+            "urban_land",
+            "rural_land",
+        ]
         subgroup = st.selectbox("Subgroup", ["building_admin", "property_manager"], key="re_v2_account_subgroup")
         col1, col2 = st.columns(2)
         with col1:
@@ -2796,29 +2810,66 @@ def _render_real_estate_v2_builder() -> None:
             user_phone = st.text_input("User phone (optional)", key="re_v2_user_phone")
             preferred_language = st.selectbox("Preferred language", ["en", "es"], key="re_v2_user_lang")
         with col2:
-            enterprise_options = {f"{row['enterprise_name']} ({row['enterprise_id']})": row['enterprise_id'] for row in enterprises}
-            if enterprise_options:
-                selected_enterprise_label = st.selectbox("Enterprise", list(enterprise_options.keys()), key="re_v2_user_enterprise_select")
-                enterprise_id = enterprise_options[selected_enterprise_label]
+            selected_enterprise_label = st.selectbox(
+                "Enterprise",
+                list(enterprise_options.keys()),
+                key="re_v2_user_enterprise_select",
+            )
+            enterprise_id = enterprise_options[selected_enterprise_label]
+            selected_enterprise_row = enterprise_rows_by_id.get(enterprise_id)
+            selected_enterprise_data = json.loads(selected_enterprise_row.get("enterprise_data_json") or "{}") if selected_enterprise_row else {}
+            enterprise_assets = list_re_v2_assets_for_enterprise(enterprise_id) if enterprise_id else []
+            asset_options = {"No asset linked": ""}
+            asset_options.update({
+                f"{row['asset_name']} ({row['asset_public_id']})": row["asset_id"]
+                for row in enterprise_assets
+            })
+            selected_asset_label = st.selectbox(
+                "Asset",
+                list(asset_options.keys()),
+                key="re_v2_user_asset_select",
+                disabled=not enterprise_id,
+            )
+            asset_id = asset_options[selected_asset_label]
+            selected_asset_row = next((row for row in enterprise_assets if row["asset_id"] == asset_id), None)
+            selected_asset_data = json.loads(selected_asset_row.get("asset_data_json") or "{}") if selected_asset_row else {}
+
+            derived_asset_category = (
+                (selected_asset_row or {}).get("asset_type")
+                or selected_enterprise_data.get("asset_category")
+                or "-"
+            )
+            derived_portfolio_segment = (
+                selected_asset_data.get("portfolio_segment")
+                or selected_enterprise_data.get("portfolio_segment")
+                or "-"
+            )
+            derived_property_reference = (
+                selected_asset_data.get("property_reference_code")
+                or (selected_asset_row or {}).get("asset_public_id")
+                or "-"
+            )
+
+            st.text_input("Asset category", value=str(derived_asset_category), disabled=True, key="re_v2_user_asset_category_info")
+            st.text_input("Portfolio segment", value=str(derived_portfolio_segment), disabled=True, key="re_v2_user_portfolio_segment_info")
+            st.text_input("Property reference code", value=str(derived_property_reference), disabled=True, key="re_v2_user_property_ref_info")
+            if subgroup == "building_admin" and enterprise_id and not asset_id:
+                st.caption("Select an asset to bind this building administrator to a concrete property context.")
             else:
-                selected_enterprise_label = None
-                enterprise_id = ""
-                st.info("Create an enterprise first. User accounts must belong to an enterprise.")
-            if subgroup == "building_admin":
-                scope_field = st.text_input("Community name", key="re_v2_ba_community")
-                ref_field = st.text_input("Community reference code", key="re_v2_ba_ref")
-            else:
-                scope_field = st.text_input("Portfolio segment", key="re_v2_pm_segment")
-                ref_field = st.text_input("Property reference code", key="re_v2_pm_ref")
+                if enterprise_id and not asset_id:
+                    st.caption("Select an asset to bind this property manager to a concrete property context.")
         if st.button("Create account", type="primary", key="re_v2_create_account"):
             if not user_email.strip():
                 st.warning("User email is required.")
             elif not first_name.strip() or not last_name.strip():
                 st.warning("First name and last name are required.")
-            elif not enterprise_id:
-                st.warning("You need to create an enterprise before creating the user account.")
             else:
-                profile_data = {"scope_field": scope_field.strip(), "reference_code": ref_field.strip()}
+                profile_data = {
+                    "asset_category": derived_asset_category if derived_asset_category != "-" else "",
+                    "portfolio_segment": derived_portfolio_segment if derived_portfolio_segment != "-" else "",
+                    "reference_code": derived_property_reference if derived_property_reference != "-" else "",
+                    "selected_asset_id": asset_id or "",
+                }
                 account_id = create_re_v2_account(
                     user_email=user_email,
                     first_name=first_name,
@@ -2831,29 +2882,68 @@ def _render_real_estate_v2_builder() -> None:
                     preferred_language=preferred_language,
                     profile_data=profile_data,
                 )
+                if asset_id:
+                    create_re_v2_account_asset_link(
+                        account_id=account_id,
+                        asset_id=asset_id,
+                        assignment_role="primary_asset_owner_view" if subgroup == "property_manager" else "building_administrator_scope",
+                        link_data={"created_from": "v2_builder_account_form"},
+                    )
                 st.success(f"Account created: {account_id}")
                 st.rerun()
 
     with tab_enterprise:
+        asset_category_options = [
+            "residential",
+            "tertiary",
+            "industrial",
+            "urban_land",
+            "rural_land",
+        ]
         col1, col2 = st.columns(2)
         with col1:
             enterprise_name = st.text_input("Enterprise name", key="re_v2_enterprise_name")
             contact_email = st.text_input("Contact email", key="re_v2_enterprise_email")
+            asset_category = st.selectbox("Asset category", asset_category_options, key="re_v2_enterprise_asset_category")
         with col2:
             enterprise_type = st.text_input("Enterprise type", value="real_estate", key="re_v2_enterprise_type")
             contact_phone = st.text_input("Contact phone", key="re_v2_enterprise_phone")
+            portfolio_segment = st.text_input("Portfolio segment", key="re_v2_enterprise_portfolio_segment")
+        initial_asset_name = st.text_input("Initial asset name", key="re_v2_initial_asset_name", placeholder="If empty, the system will create a default primary asset name.")
         if st.button("Create enterprise", type="primary", key="re_v2_create_enterprise"):
             if not enterprise_name.strip():
                 st.warning("Enterprise name is required.")
             else:
+                enterprise_data = {
+                    "asset_category": asset_category,
+                    "portfolio_segment": portfolio_segment.strip(),
+                }
                 enterprise_id = create_re_v2_enterprise(
                     enterprise_name=enterprise_name,
                     enterprise_type=enterprise_type,
                     contact_email=contact_email,
                     contact_phone=contact_phone,
-                    enterprise_data={},
+                    enterprise_data=enterprise_data,
                 )
-                st.success(f"Enterprise created: {enterprise_id}")
+                asset_public_id = f"RE2-PUB-{uuid.uuid4().hex[:8].upper()}"
+                asset_name = initial_asset_name.strip() or f"{enterprise_name.strip()} - Primary asset"
+                asset_id = create_re_v2_asset(
+                    enterprise_id=enterprise_id,
+                    asset_public_id=asset_public_id,
+                    asset_type=asset_category,
+                    asset_name=asset_name,
+                    address_line="",
+                    city="",
+                    province="",
+                    postal_code="",
+                    country="ES",
+                    asset_data={
+                        "portfolio_segment": portfolio_segment.strip(),
+                        "property_reference_code": asset_public_id,
+                        "created_from": "enterprise_setup",
+                    },
+                )
+                st.success(f"Enterprise created: {enterprise_id} | Initial asset created: {asset_public_id} ({asset_id})")
                 st.rerun()
 
     with tab_recent:
@@ -3411,4 +3501,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
