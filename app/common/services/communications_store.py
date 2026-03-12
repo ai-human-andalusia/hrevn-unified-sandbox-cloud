@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import base64
+import json
 import sqlite3
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +21,15 @@ class CommunicationsSnapshot:
     total_business: int
     total_general: int
     total_sent: int
+
+
+@dataclass(frozen=True)
+class CommunicationsSyncResult:
+    fetched: int
+    inserted: int
+    support_tickets: int
+    sales_leads: int
+    general_emails: int
 
 
 SCHEMA_SQL = """
@@ -101,6 +114,19 @@ CREATE TABLE IF NOT EXISTS comm_outbound_emails (
   created_at_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_comm_outbound_emails_delivery_status ON comm_outbound_emails(delivery_status);
+
+CREATE TABLE IF NOT EXISTS comm_sync_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL DEFAULT 'gmail',
+  status TEXT NOT NULL DEFAULT 'ok',
+  fetched_count INTEGER NOT NULL DEFAULT 0,
+  inserted_count INTEGER NOT NULL DEFAULT 0,
+  support_count INTEGER NOT NULL DEFAULT 0,
+  business_count INTEGER NOT NULL DEFAULT 0,
+  general_count INTEGER NOT NULL DEFAULT 0,
+  detail_text TEXT,
+  created_at_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -187,3 +213,148 @@ def load_communications_snapshot(db_path: Path) -> CommunicationsSnapshot:
         total_general=total_general,
         total_sent=total_sent,
     )
+
+
+def _base64url_decode(input_value: str = "") -> str:
+    s = input_value.replace("-", "+").replace("_", "/")
+    pad = "=" * ((4 - len(s) % 4) % 4)
+    return base64.b64decode((s + pad).encode("utf-8")).decode("utf-8", errors="replace")
+
+
+def _first_header(headers: list[dict[str, Any]] | None, name: str) -> str:
+    target = name.lower()
+    for item in headers or []:
+        if str(item.get("name") or "").lower() == target:
+            return str(item.get("value") or "")
+    return ""
+
+
+def _extract_text_from_payload(payload: dict[str, Any] | None) -> str:
+    if not payload:
+        return ""
+    body = payload.get("body") or {}
+    if body.get("data"):
+        return _base64url_decode(str(body.get("data") or ""))
+    parts = payload.get("parts") or []
+    for part in parts:
+        if str(part.get("mimeType") or "") == "text/plain" and ((part.get("body") or {}).get("data")):
+            return _base64url_decode(str((part.get("body") or {}).get("data") or ""))
+    for part in parts:
+        nested = _extract_text_from_payload(part)
+        if nested:
+            return nested
+    return ""
+
+
+def classify_inbound_email(subject: str = "", body: str = "") -> tuple[str, str]:
+    s = f"{subject}\n{body}".lower()
+    support_hints = ["incidencia", "error", "fallo", "soporte", "no funciona", "problema", "urgent", "bug", "ticket"]
+    business_hints = ["contratar", "presupuesto", "demo", "servicio", "pricing", "quote", "partner", "empresa", "plan", "meeting", "proposal", "invest"]
+    if any(k in s for k in support_hints):
+        return ("support", "Matched support keywords in subject/body")
+    if any(k in s for k in business_hints):
+        return ("business", "Matched commercial keywords in subject/body")
+    return ("general", "No support/commercial keyword match")
+
+
+def _http_json(url: str, *, method: str = "GET", headers: dict[str, str] | None = None, data: bytes | None = None) -> dict[str, Any]:
+    req = urllib.request.Request(url, method=method, headers=headers or {}, data=data)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _gmail_access_token(*, client_id: str, client_secret: str, refresh_token: str) -> str:
+    form = urllib.parse.urlencode({
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }).encode("utf-8")
+    payload = _http_json(
+        "https://oauth2.googleapis.com/token",
+        method="POST",
+        headers={"content-type": "application/x-www-form-urlencoded"},
+        data=form,
+    )
+    token = str(payload.get("access_token") or "")
+    if not token:
+        raise RuntimeError("Gmail OAuth token refresh returned no access token")
+    return token
+
+
+def _gmail_api(path: str, *, access_token: str) -> dict[str, Any]:
+    return _http_json(
+        f"https://gmail.googleapis.com/gmail/v1/{path}",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+
+def _insert_support_ticket(conn: sqlite3.Connection, *, source_email_id: int, from_email: str, subject: str, body_text: str) -> None:
+    cur = conn.execute(
+        "INSERT INTO comm_support_tickets(source_email_id,title,description,customer_email,topic,status,priority) VALUES(?,?,?,?, 'technical_support','open','normal')",
+        (source_email_id, subject or "Support request", body_text[:3000], from_email or None),
+    )
+    ticket_id = int(cur.lastrowid)
+    ticket_code = f"SUP-{ticket_id:06d}"
+    conn.execute("UPDATE comm_support_tickets SET ticket_code=?, updated_at_utc=CURRENT_TIMESTAMP WHERE id=?", (ticket_code, ticket_id))
+    conn.execute("INSERT INTO comm_support_ticket_messages(ticket_id,sender_type,message_text) VALUES(?, ?, ?)", (ticket_id, "customer", (body_text or "(empty message)")[:3000]))
+
+
+def _insert_sales_lead(conn: sqlite3.Connection, *, source_email_id: int, from_email: str, subject: str, body_text: str) -> None:
+    cur = conn.execute(
+        "INSERT INTO comm_sales_leads(source_email_id,contact_email,subject,message_excerpt,interest_type,priority,status) VALUES(?,?,?,?, 'general','normal','new')",
+        (source_email_id, from_email or None, subject or None, body_text[:1200]),
+    )
+    lead_id = int(cur.lastrowid)
+    lead_code = f"LEAD-{lead_id:06d}"
+    conn.execute("UPDATE comm_sales_leads SET lead_code=?, updated_at_utc=CURRENT_TIMESTAMP WHERE id=?", (lead_code, lead_id))
+
+
+def sync_gmail_inbox(db_path: Path, *, gmail_client_id: str, gmail_client_secret: str, gmail_refresh_token: str, gmail_mailbox_user: str = "me", gmail_sync_query: str = "is:unread", max_results: int = 20) -> CommunicationsSyncResult:
+    ensure_communications_schema(db_path)
+    if not gmail_client_id or not gmail_client_secret or not gmail_refresh_token:
+        raise RuntimeError("Gmail OAuth2 credentials missing")
+    access_token = _gmail_access_token(client_id=gmail_client_id, client_secret=gmail_client_secret, refresh_token=gmail_refresh_token)
+    user = urllib.parse.quote(gmail_mailbox_user or "me", safe="")
+    query = urllib.parse.quote(gmail_sync_query or "is:unread", safe="")
+    listing = _gmail_api(f"users/{user}/messages?q={query}&maxResults={max(1, min(int(max_results), 100))}", access_token=access_token)
+    messages = listing.get("messages") or []
+    result = {"fetched": len(messages), "inserted": 0, "support_tickets": 0, "sales_leads": 0, "general_emails": 0}
+    with sqlite3.connect(str(db_path)) as conn:
+        for message in messages:
+            msg_id = str(message.get("id") or "")
+            if not msg_id:
+                continue
+            full = _gmail_api(f"users/{user}/messages/{urllib.parse.quote(msg_id, safe='')}?format=full", access_token=access_token)
+            payload = full.get("payload") or {}
+            headers = payload.get("headers") or []
+            subject = _first_header(headers, "Subject")
+            from_raw = _first_header(headers, "From")
+            date_raw = _first_header(headers, "Date")
+            body_text = _extract_text_from_payload(payload) or str(full.get("snippet") or "")
+            classification, classification_reason = classify_inbound_email(subject, body_text)
+            from_email = from_raw
+            from_name = ""
+            if "<" in from_raw and ">" in from_raw:
+                left, _, right = from_raw.partition("<")
+                from_name = left.strip().strip('"')
+                from_email = right.split(">", 1)[0].strip()
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO comm_inbound_emails(source_provider,source_message_id,source_thread_id,from_email,from_name,subject,body_text,received_at_utc,status,classification,classification_reason,processed_at_utc) VALUES(?,?,?,?,?,?,?,?,'open',?,?,CURRENT_TIMESTAMP)",
+                ('gmail', msg_id, str(full.get('threadId') or '') or None, from_email[:240] if from_email else None, from_name[:180] if from_name else None, subject[:500] if subject else None, body_text[:12000] if body_text else None, date_raw[:120] if date_raw else None, classification, classification_reason),
+            )
+            if cur.rowcount < 1:
+                continue
+            email_id = int(cur.lastrowid)
+            result['inserted'] += 1
+            if classification == 'support':
+                _insert_support_ticket(conn, source_email_id=email_id, from_email=from_email, subject=subject, body_text=body_text)
+                result['support_tickets'] += 1
+            elif classification == 'business':
+                _insert_sales_lead(conn, source_email_id=email_id, from_email=from_email, subject=subject, body_text=body_text)
+                result['sales_leads'] += 1
+            else:
+                result['general_emails'] += 1
+        conn.execute("INSERT INTO comm_sync_runs(provider,status,fetched_count,inserted_count,support_count,business_count,general_count,detail_text) VALUES(?,?,?,?,?,?,?,?)", ('gmail','ok',result['fetched'],result['inserted'],result['support_tickets'],result['sales_leads'],result['general_emails'],'manual_streamlit_sync'))
+        conn.commit()
+    return CommunicationsSyncResult(**result)
