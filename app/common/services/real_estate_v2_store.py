@@ -157,6 +157,18 @@ def list_re_v2_asset_demands_rows(db_path: Path | None = None) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def list_re_v2_visits_raw(db_path: Path | None = None) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT visit_id, asset_id, created_by_account_id, visit_date_utc, visit_status, review_status, issuance_status, direct_capture_session_status, direct_capture_window_minutes, created_at_utc
+            FROM re_visits
+            ORDER BY created_at_utc DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def list_re_v2_visits(db_path: Path | None = None) -> list[dict]:
     with _connect(db_path) as conn:
         rows = conn.execute(
