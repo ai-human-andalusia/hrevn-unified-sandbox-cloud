@@ -289,6 +289,13 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
         f"DELIVERY SEAL STATUS = detached_container_hash\n"
         f"MATCH RULE = this sidecar is valid only for the exact DELIVERY ARTIFACT named above\n"
     ).encode("utf-8")
+    delivery_bundle_buffer = io.BytesIO()
+    delivery_bundle_filename = f"{package_delivery_id}_{root_hash}_delivery_bundle.zip"
+    with zipfile.ZipFile(delivery_bundle_buffer, "w", compression=zipfile.ZIP_DEFLATED) as delivery_zf:
+        delivery_zf.writestr(zip_filename, zip_bytes)
+        delivery_zf.writestr(delivery_seal_filename, delivery_seal_text)
+    delivery_bundle_bytes = delivery_bundle_buffer.getvalue()
+    delivery_bundle_sha256 = _sha256_bytes(delivery_bundle_bytes)
 
     return {
         "aer_id": aer_id,
@@ -301,5 +308,8 @@ def build_agent_operation_aer_package(record: dict[str, Any]) -> dict[str, Any]:
         "zip_bytes": zip_bytes,
         "delivery_seal_filename": delivery_seal_filename,
         "delivery_seal_bytes": delivery_seal_text,
+        "delivery_bundle_filename": delivery_bundle_filename,
+        "delivery_bundle_bytes": delivery_bundle_bytes,
+        "delivery_bundle_sha256": delivery_bundle_sha256,
         "report_filename": "agent_operation_review_report.pdf",
     }

@@ -946,6 +946,7 @@ def render_controlled_actions_vertical() -> None:
                     {"FIELD": "Manifest hash", "VALUE": package_payload["manifest_hash"][:20] + "..."},
                     {"FIELD": "Root hash", "VALUE": package_payload["root_hash"][:20] + "..."},
                     {"FIELD": "Delivery hash", "VALUE": package_payload["zip_sha256"][:20] + "..."},
+                    {"FIELD": "Delivery bundle", "VALUE": package_payload["delivery_bundle_filename"]},
                     {"FIELD": "ZIP package", "VALUE": package_payload["zip_filename"]},
                 ],
                 use_container_width=True,
@@ -1000,6 +1001,13 @@ def render_controlled_actions_vertical() -> None:
                 data=package_payload["delivery_seal_bytes"],
                 file_name=package_payload["delivery_seal_filename"],
                 mime="text/plain",
+                use_container_width=True,
+            )
+            st.download_button(
+                "Export delivery bundle (.zip)",
+                data=package_payload["delivery_bundle_bytes"],
+                file_name=package_payload["delivery_bundle_filename"],
+                mime="application/zip",
                 use_container_width=True,
             )
             st.caption("Download the ZIP package and the delivery seal together as a matched pair. The sidecar is valid only for the exact ZIP filename it names.")
