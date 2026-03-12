@@ -273,7 +273,7 @@ _I18N = {
         "field_email": "Email",
         "field_password": "Password",
         "field_recovery_email": "Recovery email (optional)",
-        "field_preferred_language": _t("field_preferred_language"),
+        "field_preferred_language": "Preferred language",
         "field_confirm_password": "Confirm password",
         "button_access_workspace": "Access workspace",
         "button_demo_mode": "Continue in documentary demo mode",
