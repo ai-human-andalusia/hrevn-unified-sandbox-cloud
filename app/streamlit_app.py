@@ -93,6 +93,10 @@ from common.services.real_estate_v2_store import (
     list_re_v2_visits_raw,
     reset_and_seed_re_v2_demo,
 )
+from common.services.communications_store import (
+    ensure_communications_schema,
+    load_communications_snapshot,
+)
 from common.services.telegram_connector import (
     get_telegram_connector_status,
     send_controlled_test_message,
@@ -111,6 +115,7 @@ APP_DATA_DIR = ROOT / "app" / "data"
 REAL_ESTATE_SQLITE_PATH = APP_DATA_DIR / "real_estate" / "hrevn_real_estate.db"
 AGENT_OPERATIONS_SQLITE_PATH = APP_DATA_DIR / "agent_operations" / "hrevn_agent_operations.db"
 AUTH_ACCESS_SQLITE_PATH = APP_DATA_DIR / "auth" / "hrevn_auth_access.db"
+COMMUNICATIONS_SQLITE_PATH = APP_DATA_DIR / "communications" / "hrevn_communications.db"
 
 LEGACY_REAL_ESTATE_ROOT = Path("/Users/miguelmiguel/CODEX/HREVN CODEX REAL ESTATE")
 LEGACY_GOV_ROOT = Path("/Users/miguelmiguel/CODEX/HREVN CODEX GOV")
@@ -3507,33 +3512,97 @@ def _count_sqlite_rows(db_path: Path, table_name: str) -> int:
         return 0
 
 
-def _load_legacy_email_rows(limit: int = 40) -> list[dict]:
-    storage_dir = LEGACY_PTDG_ROOT / "storage" / "emails"
-    rows: list[dict] = []
-    if not storage_dir.exists():
-        return rows
-    for path in sorted(storage_dir.glob("*.json"), reverse=True)[:limit]:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-        except Exception:
-            continue
-        subject = str(payload.get("subject") or "")
-        body = str(payload.get("text") or "")
-        low = f"{subject} {body}".lower()
-        if any(token in low for token in ["support", "ticket", "incid", "error", "issue"]):
-            classification = "support"
-        elif any(token in low for token in ["invest", "opportun", "demo", "meeting", "proposal", "sales"]):
-            classification = "business"
-        else:
-            classification = "general"
-        rows.append({
-            "when": path.stem.split("-")[0] if path.stem else "-",
-            "to": payload.get("to") or "-",
-            "subject": subject or "-",
-            "classification": classification,
-            "attachments": len(payload.get("attachments") or []),
-        })
-    return rows
+def render_email_panel() -> None:
+    st.subheader("Email")
+    ensure_communications_schema(COMMUNICATIONS_SQLITE_PATH)
+    snapshot = load_communications_snapshot(COMMUNICATIONS_SQLITE_PATH)
+    mail_status = get_mail_connector_status(load_common_config())
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("RECEIVED", snapshot.total_received)
+    c2.metric("SENT", snapshot.total_sent)
+    c3.metric("SUPPORT", snapshot.total_support)
+    c4.metric("BUSINESS", snapshot.total_business)
+    c5.metric("GENERAL", snapshot.total_general)
+    c6.metric("INBOUND READY", "yes" if mail_status.inbound_sync_ready else "no")
+
+    st.dataframe([
+        {"FIELD": "Inbound sync", "VALUE": "ready" if mail_status.inbound_sync_ready else "not_ready"},
+        {"FIELD": "Outbound delivery", "VALUE": "ready" if mail_status.outbound_ready else "not_ready"},
+        {"FIELD": "Preferred channel", "VALUE": mail_status.preferred_channel},
+        {"FIELD": "Recovery-ready", "VALUE": "yes" if mail_status.recovery_ready else "no"},
+        {"FIELD": "Source", "VALUE": str(COMMUNICATIONS_SQLITE_PATH)},
+    ], use_container_width=True, hide_index=True)
+
+    tab_all, tab_support, tab_business, tab_general, tab_outbound = st.tabs(["All", "Support", "Business", "General", "Outbound"])
+
+    with tab_all:
+        rows = snapshot.inbound_emails
+        st.dataframe([
+            {
+                "FROM": (r.get("from_name") or r.get("from_email") or "-"),
+                "EMAIL": r.get("from_email") or "-",
+                "SUBJECT": r.get("subject") or "-",
+                "CLASS": r.get("classification") or "general",
+                "STATUS": r.get("status") or "open",
+                "RECEIVED": r.get("received_at_utc") or "-",
+            }
+            for r in rows
+        ], use_container_width=True, hide_index=True)
+
+    with tab_support:
+        rows = snapshot.support_tickets
+        st.dataframe([
+            {
+                "TICKET": r.get("ticket_code") or "-",
+                "TITLE": r.get("title") or "-",
+                "CUSTOMER": r.get("customer_email") or "-",
+                "TOPIC": r.get("topic") or "technical_support",
+                "STATUS": r.get("status") or "open",
+                "OPENED": r.get("opened_at_utc") or "-",
+            }
+            for r in rows
+        ], use_container_width=True, hide_index=True)
+
+    with tab_business:
+        rows = snapshot.sales_leads
+        st.dataframe([
+            {
+                "LEAD": r.get("lead_code") or "-",
+                "COMPANY": r.get("company_name") or "-",
+                "CONTACT": r.get("contact_email") or "-",
+                "SUBJECT": r.get("subject") or "-",
+                "STATUS": r.get("status") or "new",
+                "CREATED": r.get("created_at_utc") or "-",
+            }
+            for r in rows
+        ], use_container_width=True, hide_index=True)
+
+    with tab_general:
+        rows = [r for r in snapshot.inbound_emails if (r.get("classification") or "general") == "general"]
+        st.dataframe([
+            {
+                "FROM": (r.get("from_name") or r.get("from_email") or "-"),
+                "EMAIL": r.get("from_email") or "-",
+                "SUBJECT": r.get("subject") or "-",
+                "STATUS": r.get("status") or "open",
+                "RECEIVED": r.get("received_at_utc") or "-",
+            }
+            for r in rows
+        ], use_container_width=True, hide_index=True)
+
+    with tab_outbound:
+        rows = snapshot.outbound_emails
+        st.dataframe([
+            {
+                "TO": r.get("to_email") or "-",
+                "SUBJECT": r.get("subject") or "-",
+                "CHANNEL": r.get("delivery_channel") or "smtp",
+                "STATUS": r.get("delivery_status") or "queued",
+                "SENT": r.get("sent_at_utc") or r.get("created_at_utc") or "-",
+            }
+            for r in rows
+        ], use_container_width=True, hide_index=True)
 
 
 def render_gov_photovoltaic_vertical() -> None:
