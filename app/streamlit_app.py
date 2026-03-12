@@ -379,6 +379,22 @@ def _is_admin_secret_email(cfg: AuthShellConfig, email: str) -> bool:
     return bool(cfg.admin_email and candidate and candidate == cfg.admin_email.strip().lower())
 
 
+def _reset_real_estate_v2_account_form() -> None:
+    defaults = {
+        "re_v2_account_subgroup": "building_admin",
+        "re_v2_user_email": "",
+        "re_v2_user_first_name": "",
+        "re_v2_user_last_name": "",
+        "re_v2_user_display_name": "",
+        "re_v2_user_phone": "",
+        "re_v2_user_lang": "en",
+        "re_v2_user_enterprise_select": "Standalone / no enterprise",
+        "re_v2_user_asset_select": "No asset linked",
+    }
+    for key, value in defaults.items():
+        st.session_state[key] = value
+
+
 def _send_real_estate_delivery_email(*, target_email: str, subject: str, body: str) -> dict[str, str]:
     smtp_enabled = _secret_bool("SMTP_ENABLED", False)
     smtp_host = _secret_value("SMTP_HOST", "")
@@ -2813,13 +2829,6 @@ def _render_real_estate_v2_builder() -> None:
         enterprise_rows_by_id = {row["enterprise_id"]: row for row in enterprises}
         enterprise_options = {"Standalone / no enterprise": ""}
         enterprise_options.update({f"{row['enterprise_name']} ({row['enterprise_id']})": row['enterprise_id'] for row in enterprises})
-        asset_category_options = [
-            "residential",
-            "tertiary",
-            "industrial",
-            "urban_land",
-            "rural_land",
-        ]
         subgroup = st.selectbox("Subgroup", ["building_admin", "property_manager"], key="re_v2_account_subgroup")
         col1, col2 = st.columns(2)
         with col1:
@@ -2830,19 +2839,11 @@ def _render_real_estate_v2_builder() -> None:
             user_phone = st.text_input("User phone (optional)", key="re_v2_user_phone")
             preferred_language = st.selectbox("Preferred language", ["en", "es"], key="re_v2_user_lang")
         with col2:
-            pending_enterprise_label = st.session_state.pop("re_v2_pending_enterprise_label", None)
             enterprise_labels = list(enterprise_options.keys())
-            enterprise_default_index = 0
-            current_enterprise_label = st.session_state.get("re_v2_user_enterprise_select")
-            if pending_enterprise_label in enterprise_labels:
-                enterprise_default_index = enterprise_labels.index(pending_enterprise_label)
-            elif current_enterprise_label in enterprise_labels:
-                enterprise_default_index = enterprise_labels.index(current_enterprise_label)
             selected_enterprise_label = st.selectbox(
                 "Enterprise",
                 enterprise_labels,
                 key="re_v2_user_enterprise_select",
-                index=enterprise_default_index,
             )
             enterprise_id = enterprise_options[selected_enterprise_label]
             selected_enterprise_row = enterprise_rows_by_id.get(enterprise_id)
@@ -2853,7 +2854,7 @@ def _render_real_estate_v2_builder() -> None:
                 if enterprise_assets
                 else {"No asset linked": ""}
             )
-            current_asset_label = st.session_state.pop("re_v2_pending_asset_label", None) or st.session_state.get("re_v2_user_asset_select")
+            current_asset_label = st.session_state.get("re_v2_user_asset_select")
             valid_asset_labels = list(asset_options.keys())
             default_asset_index = 0
             if current_asset_label in valid_asset_labels:
@@ -2902,7 +2903,13 @@ def _render_real_estate_v2_builder() -> None:
             else:
                 if enterprise_id and not asset_id:
                     st.caption("Select an asset to bind this property manager to a concrete property context.")
-        if st.button("Create account", type="primary", key="re_v2_create_account"):
+        action_a, action_b = st.columns([1, 1])
+        create_clicked = action_a.button("Create account", type="primary", key="re_v2_create_account", use_container_width=True)
+        reset_clicked = action_b.button("New account", key="re_v2_new_account", use_container_width=True)
+        if reset_clicked:
+            _reset_real_estate_v2_account_form()
+            st.rerun()
+        if create_clicked:
             if not user_email.strip():
                 st.warning("User email is required.")
             elif not first_name.strip() or not last_name.strip():
@@ -2933,6 +2940,7 @@ def _render_real_estate_v2_builder() -> None:
                         assignment_role="primary_asset_owner_view" if subgroup == "property_manager" else "building_administrator_scope",
                         link_data={"created_from": "v2_builder_account_form"},
                     )
+                _reset_real_estate_v2_account_form()
                 st.success(f"Account created: {account_id}")
                 st.rerun()
 
@@ -2989,10 +2997,6 @@ def _render_real_estate_v2_builder() -> None:
                         "created_from": "enterprise_setup",
                     },
                 )
-                new_enterprise_label = f"{enterprise_name.strip()} ({enterprise_id})"
-                new_asset_label = f"{asset_name} ({asset_public_id})"
-                st.session_state["re_v2_pending_enterprise_label"] = new_enterprise_label
-                st.session_state["re_v2_pending_asset_label"] = new_asset_label
                 st.success(f"Enterprise created: {enterprise_id} | Initial asset created: {asset_public_id} ({asset_id})")
                 st.rerun()
 
