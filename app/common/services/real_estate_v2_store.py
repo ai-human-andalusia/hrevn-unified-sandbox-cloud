@@ -146,7 +146,22 @@ def list_re_v2_asset_demands_rows(db_path: Path | None = None) -> list[dict]:
 def list_re_v2_visits(db_path: Path | None = None) -> list[dict]:
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT visit_id, asset_id, created_by_account_id, visit_date_utc, visit_status, review_status, issuance_status, direct_capture_session_status, direct_capture_window_minutes, created_at_utc FROM re_visits ORDER BY created_at_utc DESC LIMIT 50"
+            """
+            SELECT
+              v.visit_date_utc,
+              v.visit_id,
+              COALESCE(a.user_email, '') AS created_by_user,
+              COALESCE(s.asset_name, '') AS asset_name,
+              v.visit_status,
+              v.review_status,
+              v.issuance_status,
+              v.direct_capture_session_status,
+              v.direct_capture_window_minutes
+            FROM re_visits v
+            LEFT JOIN re_accounts a ON a.account_id = v.created_by_account_id
+            LEFT JOIN re_assets s ON s.asset_id = v.asset_id
+            ORDER BY v.created_at_utc DESC LIMIT 50
+            """
         ).fetchall()
         return [dict(row) for row in rows]
 
