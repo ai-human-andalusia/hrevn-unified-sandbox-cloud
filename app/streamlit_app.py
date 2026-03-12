@@ -380,7 +380,7 @@ def _is_admin_secret_email(cfg: AuthShellConfig, email: str) -> bool:
 
 
 def _reset_real_estate_v2_account_form() -> None:
-    st.session_state["re_v2_account_form_reset_pending"] = True
+    st.session_state["re_v2_account_form_nonce"] = int(st.session_state.get("re_v2_account_form_nonce", 0) or 0) + 1
 
 
 def _send_real_estate_delivery_email(*, target_email: str, subject: str, body: str) -> dict[str, str]:
@@ -2813,104 +2813,88 @@ def _render_real_estate_v2_builder() -> None:
     ])
 
     with tab_account:
-        if st.session_state.pop("re_v2_account_form_reset_pending", False):
-            defaults = {
-                "re_v2_account_subgroup": "building_admin",
-                "re_v2_user_email": "",
-                "re_v2_user_first_name": "",
-                "re_v2_user_last_name": "",
-                "re_v2_user_display_name": "",
-                "re_v2_user_phone": "",
-                "re_v2_user_lang": "en",
-                "re_v2_user_enterprise_select": "Standalone / no enterprise",
-                "re_v2_user_asset_select": "No asset linked",
-            }
-            for key, value in defaults.items():
-                st.session_state[key] = value
+        account_form_nonce = int(st.session_state.get("re_v2_account_form_nonce", 0) or 0)
         enterprises = list_re_v2_enterprises()
         enterprise_rows_by_id = {row["enterprise_id"]: row for row in enterprises}
         enterprise_options = {"Standalone / no enterprise": ""}
         enterprise_options.update({f"{row['enterprise_name']} ({row['enterprise_id']})": row['enterprise_id'] for row in enterprises})
-        subgroup = st.selectbox("Subgroup", ["building_admin", "property_manager"], key="re_v2_account_subgroup")
-        col1, col2 = st.columns(2)
-        with col1:
-            user_email = st.text_input("User email", key="re_v2_user_email")
-            first_name = st.text_input("First name", key="re_v2_user_first_name")
-            last_name = st.text_input("Last name", key="re_v2_user_last_name")
-            display_name = st.text_input("Display name (optional)", key="re_v2_user_display_name")
-            user_phone = st.text_input("User phone (optional)", key="re_v2_user_phone")
-            preferred_language = st.selectbox("Preferred language", ["en", "es"], key="re_v2_user_lang")
-        with col2:
-            enterprise_labels = list(enterprise_options.keys())
-            selected_enterprise_label = st.selectbox(
-                "Enterprise",
-                enterprise_labels,
-                key="re_v2_user_enterprise_select",
-            )
-            enterprise_id = enterprise_options[selected_enterprise_label]
-            selected_enterprise_row = enterprise_rows_by_id.get(enterprise_id)
-            selected_enterprise_data = json.loads(selected_enterprise_row.get("enterprise_data_json") or "{}") if selected_enterprise_row else {}
-            enterprise_assets = list_re_v2_assets_for_enterprise(enterprise_id) if enterprise_id else []
-            asset_options = (
-                {f"{row['asset_name']} ({row['asset_public_id']})": row["asset_id"] for row in enterprise_assets}
-                if enterprise_assets
-                else {"No asset linked": ""}
-            )
-            current_asset_label = st.session_state.get("re_v2_user_asset_select")
-            valid_asset_labels = list(asset_options.keys())
-            default_asset_index = 0
-            if current_asset_label in valid_asset_labels:
-                default_asset_index = valid_asset_labels.index(current_asset_label)
-            selected_asset_label = st.selectbox(
-                "Asset",
-                valid_asset_labels,
-                key="re_v2_user_asset_select",
-                index=default_asset_index,
-                disabled=not enterprise_id,
-            )
-            asset_id = asset_options[selected_asset_label]
-            selected_asset_row = next((row for row in enterprise_assets if row["asset_id"] == asset_id), None)
-            selected_asset_data = json.loads(selected_asset_row.get("asset_data_json") or "{}") if selected_asset_row else {}
-
-            derived_asset_category = (
-                (selected_asset_row or {}).get("asset_type")
-                or selected_enterprise_data.get("asset_category")
-                or "-"
-            )
-            derived_portfolio_segment = (
-                selected_asset_data.get("portfolio_segment")
-                or selected_enterprise_data.get("portfolio_segment")
-                or "-"
-            )
-            derived_property_reference = (
-                selected_asset_data.get("property_reference_code")
-                or (selected_asset_row or {}).get("asset_public_id")
-                or "-"
-            )
-
-            st.dataframe(
-                [
-                    {
-                        "ASSET CATEGORY": str(derived_asset_category),
-                        "PORTFOLIO SEGMENT": str(derived_portfolio_segment),
-                        "PROPERTY REFERENCE CODE": str(derived_property_reference),
-                    }
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-            st.caption("These values are auto-filled from the selected enterprise and asset.")
-            if subgroup == "building_admin" and enterprise_id and not asset_id:
-                st.caption("Select an asset to bind this building administrator to a concrete property context.")
-            else:
-                if enterprise_id and not asset_id:
-                    st.caption("Select an asset to bind this property manager to a concrete property context.")
-        action_a, action_b = st.columns([1, 1])
-        create_clicked = action_a.button("Create account", type="primary", key="re_v2_create_account", use_container_width=True)
-        reset_clicked = action_b.button("New account", key="re_v2_new_account", use_container_width=True)
+        reset_clicked = st.button("New account", key="re_v2_new_account", use_container_width=True)
         if reset_clicked:
             _reset_real_estate_v2_account_form()
             st.rerun()
+
+        with st.form(key=f"re_v2_account_form::{account_form_nonce}", clear_on_submit=True):
+            subgroup = st.selectbox("Subgroup", ["building_admin", "property_manager"], key=f"re_v2_account_subgroup::{account_form_nonce}")
+            col1, col2 = st.columns(2)
+            with col1:
+                user_email = st.text_input("User email", key=f"re_v2_user_email::{account_form_nonce}")
+                first_name = st.text_input("First name", key=f"re_v2_user_first_name::{account_form_nonce}")
+                last_name = st.text_input("Last name", key=f"re_v2_user_last_name::{account_form_nonce}")
+                display_name = st.text_input("Display name (optional)", key=f"re_v2_user_display_name::{account_form_nonce}")
+                user_phone = st.text_input("User phone (optional)", key=f"re_v2_user_phone::{account_form_nonce}")
+                preferred_language = st.selectbox("Preferred language", ["en", "es"], key=f"re_v2_user_lang::{account_form_nonce}")
+            with col2:
+                enterprise_labels = list(enterprise_options.keys())
+                selected_enterprise_label = st.selectbox(
+                    "Enterprise",
+                    enterprise_labels,
+                    key=f"re_v2_user_enterprise_select::{account_form_nonce}",
+                )
+                enterprise_id = enterprise_options[selected_enterprise_label]
+                selected_enterprise_row = enterprise_rows_by_id.get(enterprise_id)
+                selected_enterprise_data = json.loads(selected_enterprise_row.get("enterprise_data_json") or "{}") if selected_enterprise_row else {}
+                enterprise_assets = list_re_v2_assets_for_enterprise(enterprise_id) if enterprise_id else []
+                asset_options = (
+                    {f"{row['asset_name']} ({row['asset_public_id']})": row["asset_id"] for row in enterprise_assets}
+                    if enterprise_assets
+                    else {"No asset linked": ""}
+                )
+                valid_asset_labels = list(asset_options.keys())
+                selected_asset_label = st.selectbox(
+                    "Asset",
+                    valid_asset_labels,
+                    key=f"re_v2_user_asset_select::{account_form_nonce}",
+                    disabled=not enterprise_id,
+                )
+                asset_id = asset_options[selected_asset_label]
+                selected_asset_row = next((row for row in enterprise_assets if row["asset_id"] == asset_id), None)
+                selected_asset_data = json.loads(selected_asset_row.get("asset_data_json") or "{}") if selected_asset_row else {}
+
+                derived_asset_category = (
+                    (selected_asset_row or {}).get("asset_type")
+                    or selected_enterprise_data.get("asset_category")
+                    or "-"
+                )
+                derived_portfolio_segment = (
+                    selected_asset_data.get("portfolio_segment")
+                    or selected_enterprise_data.get("portfolio_segment")
+                    or "-"
+                )
+                derived_property_reference = (
+                    selected_asset_data.get("property_reference_code")
+                    or (selected_asset_row or {}).get("asset_public_id")
+                    or "-"
+                )
+
+                st.dataframe(
+                    [
+                        {
+                            "ASSET CATEGORY": str(derived_asset_category),
+                            "PORTFOLIO SEGMENT": str(derived_portfolio_segment),
+                            "PROPERTY REFERENCE CODE": str(derived_property_reference),
+                        }
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.caption("These values are auto-filled from the selected enterprise and asset.")
+                if subgroup == "building_admin" and enterprise_id and not asset_id:
+                    st.caption("Select an asset to bind this building administrator to a concrete property context.")
+                elif enterprise_id and not asset_id:
+                    st.caption("Select an asset to bind this property manager to a concrete property context.")
+
+            create_clicked = st.form_submit_button("Create account", type="primary", use_container_width=True)
+
         if create_clicked:
             if not user_email.strip():
                 st.warning("User email is required.")
@@ -2942,7 +2926,6 @@ def _render_real_estate_v2_builder() -> None:
                         assignment_role="primary_asset_owner_view" if subgroup == "property_manager" else "building_administrator_scope",
                         link_data={"created_from": "v2_builder_account_form"},
                     )
-                _reset_real_estate_v2_account_form()
                 st.success(f"Account created: {account_id}")
                 st.rerun()
 
