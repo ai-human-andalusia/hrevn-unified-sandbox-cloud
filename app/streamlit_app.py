@@ -17,6 +17,7 @@ from common.security import evaluate_secret_posture, redact_config_for_ui
 from common.services.ai_router import choose_ai_provider
 from common.services.gmail_connector import get_mail_connector_status
 from common.services.github_connector import get_github_connector_status
+from common.services.agent_operations_package import build_agent_operation_aer_package
 from common.services.agent_operations_sqlite import (
     load_agent_operations_snapshot,
     set_agent_operation_decision,
@@ -894,24 +895,54 @@ def render_controlled_actions_vertical() -> None:
         )
 
     row_bottom_a, row_bottom_b, row_bottom_c = st.columns([0.92, 1.08, 1.0])
+    package_payload = build_agent_operation_aer_package(selected) if selected["status"] != "pending_review" else None
+
     with row_bottom_a:
         _render_panel_section_title("Human Authorization")
         st.dataframe(
             [
                 {"CONTROL": "Decision", "STATE": selected["human_action"].replace("_", " ").title()},
-                {"CONTROL": "Recommended", "STATE": "Yes" if selected["recommended_for_execution"] else "No"},
+                {"CONTROL": "Reviewer", "STATE": selected.get("reviewer_name") or "Pending reviewer"},
+                {"CONTROL": "Reviewer role", "STATE": selected.get("reviewer_role") or "Pending reviewer role"},
                 {"CONTROL": "Seal status", "STATE": selected["seal_status"].replace("_", " ").title()},
             ],
             use_container_width=True,
             hide_index=True,
         )
+        rationale_key = f"agent_ops_rationale_{selected['record_id']}"
+        rationale = st.text_area(
+            "Decision rationale",
+            value=st.session_state.get(rationale_key, selected.get("decision_rationale") or ""),
+            key=rationale_key,
+            height=96,
+            placeholder="Add a brief rationale for approval or rejection.",
+        )
+        reviewer_name = st.session_state.get("auth_email") or "admin@hrevn.local"
+        reviewer_role = "Administrator" if st.session_state.get("auth_role") == "admin" else "Operator"
         if selected["status"] == "pending_review":
             if st.button("Authorize and execute", type="primary", use_container_width=True, key=f"approve_{selected['record_id']}"):
-                set_agent_operation_decision(AGENT_OPERATIONS_SQLITE_PATH, selected["record_id"], "approved")
+                set_agent_operation_decision(
+                    AGENT_OPERATIONS_SQLITE_PATH,
+                    selected["record_id"],
+                    "approved",
+                    reviewer_name=reviewer_name,
+                    reviewer_role=reviewer_role,
+                    rationale=rationale,
+                )
                 st.rerun()
             if st.button("Reject", use_container_width=True, key=f"reject_{selected['record_id']}"):
-                set_agent_operation_decision(AGENT_OPERATIONS_SQLITE_PATH, selected["record_id"], "rejected")
-                st.rerun()
+                if not rationale.strip():
+                    st.warning("Reject requires a short rationale.")
+                else:
+                    set_agent_operation_decision(
+                        AGENT_OPERATIONS_SQLITE_PATH,
+                        selected["record_id"],
+                        "rejected",
+                        reviewer_name=reviewer_name,
+                        reviewer_role=reviewer_role,
+                        rationale=rationale,
+                    )
+                    st.rerun()
         elif selected["status"] == "executed_sealed":
             st.success("Operation authorized, executed and sealed.")
         else:
@@ -924,34 +955,55 @@ def render_controlled_actions_vertical() -> None:
             use_container_width=True,
             hide_index=True,
         )
-
-    with row_bottom_c:
-        _render_panel_section_title("Verification Seal")
         st.dataframe(
             [
-                {"FIELD": "Seal reference", "VALUE": selected["seal_reference"] or "Pending decision"},
-                {"FIELD": "Export package", "VALUE": "Ready" if selected["status"] != "pending_review" else "Waiting for human decision"},
+                {"FIELD": "Workflow ID", "VALUE": selected.get("workflow_id") or "-"},
+                {"FIELD": "Agent role", "VALUE": selected.get("agent_role") or "-"},
+                {"FIELD": "Approval required", "VALUE": "Yes" if selected.get("human_approval_required") else "No"},
+                {"FIELD": "Execution result", "VALUE": selected.get("execution_result") or "-"},
             ],
             use_container_width=True,
             hide_index=True,
         )
-        if selected["status"] != "pending_review":
-            export_text = "\n".join([
-                f"Record: {selected['record_id']}",
-                f"Agent: {selected['agent_name']}",
-                f"Operation: {selected['intent']}",
-                f"Decision: {selected['human_action']}",
-                f"Seal: {selected['seal_reference']}",
-            ])
+
+    with row_bottom_c:
+        _render_panel_section_title("Execution Record")
+        if package_payload is None:
+            st.dataframe(
+                [
+                    {"FIELD": "Seal reference", "VALUE": selected["seal_reference"] or "Pending decision"},
+                    {"FIELD": "AER package", "VALUE": "Waiting for human decision"},
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption("AER package generation starts after approval or rejection.")
+        else:
+            st.dataframe(
+                [
+                    {"FIELD": "AER ID", "VALUE": package_payload["aer_id"]},
+                    {"FIELD": "Seal reference", "VALUE": selected["seal_reference"] or "-"},
+                    {"FIELD": "Manifest hash", "VALUE": package_payload["manifest_hash"][:20] + "..."},
+                    {"FIELD": "Root hash", "VALUE": package_payload["root_hash"][:20] + "..."},
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.dataframe(
+                [
+                    {"ARTIFACT": row["artifact"], "SHA256": row["sha256"][:16] + "...", "SIZE": row["size_bytes"]}
+                    for row in package_payload["artifacts"]
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
             st.download_button(
-                "Export regulated operation package",
-                data=export_text.encode("utf-8"),
-                file_name=f"{selected['record_id']}_review_package.txt",
-                mime="text/plain",
+                "Export AER package (.zip)",
+                data=package_payload["zip_bytes"],
+                file_name=package_payload["zip_filename"],
+                mime="application/zip",
                 use_container_width=True,
             )
-        else:
-            st.caption("Package export becomes available after human approval or rejection.")
 
 def render_real_estate_vertical() -> None:
     st.subheader("Real Estate Vertical")
