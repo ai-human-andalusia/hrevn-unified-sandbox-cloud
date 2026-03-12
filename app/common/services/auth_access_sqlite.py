@@ -143,6 +143,17 @@ def ensure_auth_access_db(db_path: Path) -> None:
               details_json TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS auth_ip_controls (
+              ip_public TEXT PRIMARY KEY,
+              failed_login_count INTEGER NOT NULL DEFAULT 0,
+              last_failed_login_at_utc TEXT,
+              cooldown_until_utc TEXT,
+              blocked_until_utc TEXT,
+              block_reason TEXT,
+              created_at_utc TEXT NOT NULL,
+              updated_at_utc TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_auth_accounts_status ON auth_accounts(account_status);
             CREATE INDEX IF NOT EXISTS idx_auth_local_verified ON auth_local_credentials(email_verified_flag);
             CREATE INDEX IF NOT EXISTS idx_auth_login_events_created_at ON auth_login_events(created_at_utc);
@@ -152,6 +163,8 @@ def ensure_auth_access_db(db_path: Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_auth_lifecycle_email ON auth_account_lifecycle_events(user_email);
             CREATE INDEX IF NOT EXISTS idx_auth_lifecycle_created_at ON auth_account_lifecycle_events(created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_auth_notifications_created_at ON auth_notification_events(created_at_utc);
+            CREATE INDEX IF NOT EXISTS idx_auth_ip_controls_cooldown ON auth_ip_controls(cooldown_until_utc);
+            CREATE INDEX IF NOT EXISTS idx_auth_ip_controls_blocked ON auth_ip_controls(blocked_until_utc);
             '''
         )
 
@@ -418,6 +431,16 @@ def get_account_record(db_path: Path, user_email: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def get_ip_control_record(db_path: Path, ip_public: str) -> dict[str, Any] | None:
+    ensure_auth_access_db(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM auth_ip_controls WHERE ip_public=?",
+            (ip_public,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def register_failed_login(db_path: Path, *, user_email: str) -> dict[str, Any] | None:
     ensure_auth_access_db(db_path)
     now = _utc_now()
@@ -442,6 +465,85 @@ def register_failed_login(db_path: Path, *, user_email: str) -> dict[str, Any] |
             (failed_count, now, failed_count, lockout_until, now, user_email),
         )
     return get_account_record(db_path, user_email)
+
+
+def register_failed_ip_attempt(
+    db_path: Path,
+    *,
+    ip_public: str,
+    cooldown_threshold: int,
+    block_threshold: int,
+) -> dict[str, Any]:
+    ensure_auth_access_db(db_path)
+    now = _utc_now()
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT failed_login_count FROM auth_ip_controls WHERE ip_public=?",
+            (ip_public,),
+        ).fetchone()
+        failed_count = int(row["failed_login_count"] or 0) + 1 if row else 1
+        cooldown_until = now if failed_count >= cooldown_threshold else None
+        blocked_until = now if failed_count >= block_threshold else None
+        block_reason = "too_many_failed_attempts" if failed_count >= block_threshold else None
+        conn.execute(
+            '''
+            INSERT INTO auth_ip_controls(
+              ip_public, failed_login_count, last_failed_login_at_utc, cooldown_until_utc,
+              blocked_until_utc, block_reason, created_at_utc, updated_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ip_public) DO UPDATE SET
+              failed_login_count=excluded.failed_login_count,
+              last_failed_login_at_utc=excluded.last_failed_login_at_utc,
+              cooldown_until_utc=excluded.cooldown_until_utc,
+              blocked_until_utc=excluded.blocked_until_utc,
+              block_reason=excluded.block_reason,
+              updated_at_utc=excluded.updated_at_utc
+            ''',
+            (ip_public, failed_count, now, cooldown_until, blocked_until, block_reason, now, now),
+        )
+    return get_ip_control_record(db_path, ip_public) or {}
+
+
+def clear_ip_failed_state(db_path: Path, *, ip_public: str) -> None:
+    ensure_auth_access_db(db_path)
+    with _connect(db_path) as conn:
+        conn.execute(
+            '''
+            UPDATE auth_ip_controls
+            SET failed_login_count=0,
+                last_failed_login_at_utc=NULL,
+                cooldown_until_utc=NULL,
+                updated_at_utc=?
+            WHERE ip_public=?
+            ''',
+            (_utc_now(), ip_public),
+        )
+
+
+def unblock_ip(db_path: Path, *, ip_public: str) -> None:
+    ensure_auth_access_db(db_path)
+    with _connect(db_path) as conn:
+        conn.execute(
+            '''
+            UPDATE auth_ip_controls
+            SET failed_login_count=0,
+                last_failed_login_at_utc=NULL,
+                cooldown_until_utc=NULL,
+                blocked_until_utc=NULL,
+                block_reason=NULL,
+                updated_at_utc=?
+            WHERE ip_public=?
+            ''',
+            (_utc_now(), ip_public),
+        )
+
+
+def ip_is_in_cooldown(record: dict[str, Any] | None) -> bool:
+    return bool(record and record.get("cooldown_until_utc") and not record.get("blocked_until_utc"))
+
+
+def ip_is_blocked(record: dict[str, Any] | None) -> bool:
+    return bool(record and record.get("blocked_until_utc"))
 
 
 def clear_failed_login_state(db_path: Path, *, user_email: str) -> None:
@@ -771,4 +873,8 @@ def get_recent_auth_snapshot(db_path: Path, limit: int = 20) -> dict[str, list[d
             "SELECT related_user_email, target_email, event_type, delivery_channel, delivery_status, subject, error_detail, created_at_utc FROM auth_notification_events ORDER BY id DESC LIMIT ?",
             (limit,),
         )]
-    return {"accounts": accounts, "events": events, "sessions": sessions, "lifecycle": lifecycle, "notifications": notifications}
+        ip_controls = [dict(r) for r in conn.execute(
+            "SELECT ip_public, failed_login_count, last_failed_login_at_utc, cooldown_until_utc, blocked_until_utc, block_reason, updated_at_utc FROM auth_ip_controls ORDER BY updated_at_utc DESC LIMIT ?",
+            (limit,),
+        )]
+    return {"accounts": accounts, "events": events, "sessions": sessions, "lifecycle": lifecycle, "notifications": notifications, "ip_controls": ip_controls}

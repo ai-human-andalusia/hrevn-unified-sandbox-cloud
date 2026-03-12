@@ -22,23 +22,29 @@ from common.services.auth_access_sqlite import (
     AuthRequestContext,
     authenticate_local_account,
     clear_failed_login_state,
+    clear_ip_failed_state,
     count_active_sessions,
     create_local_account,
     create_auth_session,
     get_account_record,
     get_account_status,
+    get_ip_control_record,
     get_recent_auth_snapshot,
+    ip_is_blocked,
+    ip_is_in_cooldown,
     is_account_temporarily_locked,
     issue_password_reset_token,
     log_auth_event,
     log_auth_notification_event,
     register_failed_login,
+    register_failed_ip_attempt,
     reactivate_account,
     revoke_all_active_sessions_for_user,
     revoke_auth_session,
     reset_local_password,
     set_account_status,
     touch_auth_session,
+    unblock_ip,
     upsert_auth_account,
     verify_email_token,
 )
@@ -384,6 +390,44 @@ def _max_active_sessions() -> int:
     return _secret_int("SANDBOX_MAX_ACTIVE_SESSIONS_PER_USER", 3)
 
 
+def _ip_cooldown_threshold() -> int:
+    return _secret_int("SANDBOX_IP_COOLDOWN_THRESHOLD", 5)
+
+
+def _ip_block_threshold() -> int:
+    return _secret_int("SANDBOX_IP_BLOCK_THRESHOLD", 8)
+
+
+def _send_telegram_security_alert(event_type: str, message: str) -> None:
+    cfg = load_common_config()
+    telegram_status = get_telegram_connector_status(cfg)
+    if not telegram_status.ready:
+        log_auth_notification_event(
+            AUTH_ACCESS_SQLITE_PATH,
+            related_user_email=None,
+            target_email="telegram_admin_channel",
+            event_type=event_type,
+            delivery_channel="telegram",
+            delivery_status="not_configured",
+            subject=event_type,
+            error_detail=None,
+            details_json=json.dumps({"message": message}),
+        )
+        return
+    ok, detail = send_controlled_test_message(message)
+    log_auth_notification_event(
+        AUTH_ACCESS_SQLITE_PATH,
+        related_user_email=None,
+        target_email="telegram_admin_channel",
+        event_type=event_type,
+        delivery_channel="telegram",
+        delivery_status="sent" if ok else "failed",
+        subject=event_type,
+        error_detail=None if ok else detail,
+        details_json=json.dumps({"message": message}),
+    )
+
+
 def _logout() -> None:
     session_id = st.session_state.get("auth_session_id") or ""
     auth_email = st.session_state.get("auth_email") or None
@@ -452,6 +496,33 @@ def _render_auth_shell() -> None:
             password = st.text_input("Password", type="password", key="login_password")
             if st.button("Access workspace", type="primary"):
                 context = _get_auth_request_context()
+                ip_record = get_ip_control_record(AUTH_ACCESS_SQLITE_PATH, context.ip_public)
+                if ip_is_blocked(ip_record):
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=None,
+                        user_role=None,
+                        identifier_attempted=email.strip().lower() or None,
+                        event_type="login_failure",
+                        success_flag=False,
+                        failure_reason="ip_blocked",
+                        context=context,
+                    )
+                    st.error("This IP is temporarily blocked.")
+                    st.stop()
+                if ip_is_in_cooldown(ip_record):
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=None,
+                        user_role=None,
+                        identifier_attempted=email.strip().lower() or None,
+                        event_type="login_failure",
+                        success_flag=False,
+                        failure_reason="ip_cooldown",
+                        context=context,
+                    )
+                    st.error("This IP is in cooldown due to repeated failed attempts.")
+                    st.stop()
                 matched = None
                 if cfg.admin_email and cfg.admin_password and email.strip().lower() == cfg.admin_email.strip().lower() and password == cfg.admin_password:
                     matched = ("admin", cfg.admin_email)
@@ -511,6 +582,7 @@ def _render_auth_shell() -> None:
                             st.error(f"Session limit reached for this account ({max_sessions}).")
                             st.stop()
                         clear_failed_login_state(AUTH_ACCESS_SQLITE_PATH, user_email=matched[1])
+                        clear_ip_failed_state(AUTH_ACCESS_SQLITE_PATH, ip_public=context.ip_public)
                         session_id = create_auth_session(
                             AUTH_ACCESS_SQLITE_PATH,
                             user_email=matched[1],
@@ -535,11 +607,35 @@ def _render_auth_shell() -> None:
                         st.rerun()
                 elif cfg.auth_enabled and cfg.has_configured_accounts:
                     local_account = get_account_record(AUTH_ACCESS_SQLITE_PATH, email.strip().lower())
+                    ip_result = register_failed_ip_attempt(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        ip_public=context.ip_public,
+                        cooldown_threshold=_ip_cooldown_threshold(),
+                        block_threshold=_ip_block_threshold(),
+                    )
                     if local_account:
                         updated = register_failed_login(AUTH_ACCESS_SQLITE_PATH, user_email=email.strip().lower())
                         failure_reason = "invalid_credentials_or_password"
                         if is_account_temporarily_locked(updated):
                             failure_reason = "temporary_lockout"
+                            _send_telegram_security_alert(
+                                "user_lockout",
+                                f"H-REVN security alert: user lockout triggered for {email.strip().lower()} from IP {context.ip_public}.",
+                            )
+                    else:
+                        failure_reason = "invalid_credentials_or_password"
+                    if ip_is_blocked(ip_result):
+                        failure_reason = "ip_blocked"
+                        _send_telegram_security_alert(
+                            "ip_blocked",
+                            f"H-REVN security alert: IP blocked after repeated failed attempts. IP={context.ip_public}.",
+                        )
+                    elif ip_is_in_cooldown(ip_result):
+                        failure_reason = "ip_cooldown"
+                        _send_telegram_security_alert(
+                            "ip_cooldown",
+                            f"H-REVN security alert: IP cooldown triggered. IP={context.ip_public}.",
+                        )
                     log_auth_event(
                         AUTH_ACCESS_SQLITE_PATH,
                         user_email=None,
@@ -547,10 +643,14 @@ def _render_auth_shell() -> None:
                         identifier_attempted=email.strip().lower() or None,
                         event_type="login_failure",
                         success_flag=False,
-                        failure_reason=failure_reason if local_account else "invalid_credentials_or_password",
+                        failure_reason=failure_reason,
                         context=context,
                     )
-                    if local_account and failure_reason == "temporary_lockout":
+                    if failure_reason == "ip_blocked":
+                        st.error("Too many failed attempts from this IP. It is now blocked.")
+                    elif failure_reason == "ip_cooldown":
+                        st.error("This IP has entered cooldown after repeated failed attempts.")
+                    elif local_account and failure_reason == "temporary_lockout":
                         st.error("Too many failed login attempts. This account is temporarily locked.")
                     else:
                         st.error("Invalid credentials.")
@@ -855,6 +955,7 @@ def render_access_security_panel() -> None:
     sessions = snapshot.get("sessions", [])
     lifecycle = snapshot.get("lifecycle", [])
     notifications = snapshot.get("notifications", [])
+    ip_controls = snapshot.get("ip_controls", [])
 
     total_events = len(events)
     login_success = sum(1 for row in events if row.get("event_type") in {"login_success", "login_success_demo"})
@@ -877,7 +978,7 @@ def render_access_security_panel() -> None:
     with top_f:
         st.metric("Closed", closed_accounts)
 
-    tab_accounts, tab_events, tab_sessions, tab_lifecycle, tab_notifications = st.tabs(["Accounts", "Access Events", "Active Sessions", "Lifecycle", "Notifications"])
+    tab_accounts, tab_events, tab_sessions, tab_lifecycle, tab_notifications, tab_ip = st.tabs(["Accounts", "Access Events", "Active Sessions", "Lifecycle", "Notifications", "IP Controls"])
 
     with tab_accounts:
         account_rows = [
@@ -973,6 +1074,10 @@ def render_access_security_panel() -> None:
                             "Any active sessions were revoked as part of this action."
                         ),
                     )
+                    _send_telegram_security_alert(
+                        "account_suspended",
+                        f"H-REVN security alert: account suspended for {selected_account}.",
+                    )
                     st.success("Account suspended.")
                     st.rerun()
                 close_disabled = is_self or current_status == "closed" or not (action_reason or "").strip()
@@ -1008,6 +1113,10 @@ def render_access_security_panel() -> None:
                             "Any active sessions were revoked as part of this action."
                         ),
                     )
+                    _send_telegram_security_alert(
+                        "account_closed",
+                        f"H-REVN security alert: account closed for {selected_account}.",
+                    )
                     st.success("Account closed.")
                     st.rerun()
                 if button_c.button("Reactivate", use_container_width=True, disabled=current_status == "active"):
@@ -1040,6 +1149,10 @@ def render_access_security_panel() -> None:
                             f"Reason: {(action_reason or '').strip() or 'No reason provided'}"
                         ),
                     )
+                    _send_telegram_security_alert(
+                        "account_reactivated",
+                        f"H-REVN security alert: account reactivated for {selected_account}.",
+                    )
                     st.success("Account reactivated.")
                     st.rerun()
                 if st.button("Revoke active sessions", use_container_width=True, key=f"revoke_sessions_{selected_account}"):
@@ -1057,6 +1170,10 @@ def render_access_security_panel() -> None:
                         failure_reason=None,
                         context=context,
                         details_json=json.dumps({"revoked_sessions": revoked}),
+                    )
+                    _send_telegram_security_alert(
+                        "sessions_revoked_by_admin",
+                        f"H-REVN security alert: admin revoked {revoked} active session(s) for {selected_account}.",
                     )
                     st.success(f"Revoked {revoked} active session(s).")
                     st.rerun()
@@ -1142,6 +1259,44 @@ def render_access_security_panel() -> None:
                 for row in notifications
             ]
             st.dataframe(notification_rows, use_container_width=True, hide_index=True)
+
+    with tab_ip:
+        if not ip_controls:
+            st.info("No IP controls recorded yet.")
+        else:
+            ip_rows = [
+                {
+                    "IP": row.get("ip_public") or "-",
+                    "FAILED LOGINS": row.get("failed_login_count") or 0,
+                    "LAST FAILED": row.get("last_failed_login_at_utc") or "-",
+                    "COOLDOWN": row.get("cooldown_until_utc") or "-",
+                    "BLOCKED": row.get("blocked_until_utc") or "-",
+                    "REASON": row.get("block_reason") or "-",
+                }
+                for row in ip_controls
+            ]
+            st.dataframe(ip_rows, use_container_width=True, hide_index=True)
+            selectable_ips = [row["IP"] for row in ip_rows if row["IP"] != "-"]
+            if selectable_ips:
+                selected_ip = st.selectbox("IP", selectable_ips, key="auth_ip_target")
+                if st.button("Unblock IP", use_container_width=True):
+                    unblock_ip(AUTH_ACCESS_SQLITE_PATH, ip_public=selected_ip)
+                    log_auth_event(
+                        AUTH_ACCESS_SQLITE_PATH,
+                        user_email=st.session_state.get("auth_email"),
+                        user_role=st.session_state.get("auth_role"),
+                        identifier_attempted=selected_ip,
+                        event_type="ip_unblocked_by_admin",
+                        success_flag=True,
+                        failure_reason=None,
+                        context=_get_auth_request_context(),
+                    )
+                    _send_telegram_security_alert(
+                        "ip_unblocked_by_admin",
+                        f"H-REVN security alert: admin unblocked IP {selected_ip}.",
+                    )
+                    st.success("IP unblocked.")
+                    st.rerun()
 
 
 def _prepare_real_estate_context(snapshot, visit_id: str) -> dict:
