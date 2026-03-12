@@ -43,6 +43,19 @@ CREATE TABLE IF NOT EXISTS re_assets (
   FOREIGN KEY (enterprise_id) REFERENCES re_enterprises(enterprise_id)
 );
 
+CREATE TABLE IF NOT EXISTS re_account_asset_links (
+  link_id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  asset_id TEXT NOT NULL,
+  assignment_role TEXT NOT NULL DEFAULT 'assigned_operator',
+  link_data_json TEXT NOT NULL DEFAULT '{}',
+  created_at_utc TEXT NOT NULL,
+  updated_at_utc TEXT NOT NULL,
+  FOREIGN KEY (account_id) REFERENCES re_accounts(account_id),
+  FOREIGN KEY (asset_id) REFERENCES re_assets(asset_id),
+  UNIQUE(account_id, asset_id)
+);
+
 CREATE TABLE IF NOT EXISTS re_visits (
   visit_id TEXT PRIMARY KEY,
   asset_id TEXT NOT NULL,
@@ -149,6 +162,8 @@ CREATE TABLE IF NOT EXISTS re_deliveries (
 
 CREATE INDEX IF NOT EXISTS idx_re_accounts_subgroup ON re_accounts(subgroup);
 CREATE INDEX IF NOT EXISTS idx_re_assets_enterprise ON re_assets(enterprise_id);
+CREATE INDEX IF NOT EXISTS idx_re_account_asset_links_account ON re_account_asset_links(account_id);
+CREATE INDEX IF NOT EXISTS idx_re_account_asset_links_asset ON re_account_asset_links(asset_id);
 CREATE INDEX IF NOT EXISTS idx_re_visits_asset ON re_visits(asset_id);
 CREATE INDEX IF NOT EXISTS idx_re_observations_visit ON re_observations(visit_id);
 CREATE INDEX IF NOT EXISTS idx_re_photos_visit ON re_photos(visit_id);

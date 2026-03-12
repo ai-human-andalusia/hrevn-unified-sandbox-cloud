@@ -41,6 +41,7 @@ def get_re_v2_summary(db_path: Path | None = None) -> dict:
             "accounts": count("re_accounts"),
             "enterprises": count("re_enterprises"),
             "assets": count("re_assets"),
+            "assignments": count("re_account_asset_links"),
             "visits": count("re_visits"),
             "observations": count("re_observations"),
             "photos": count("re_photos"),
@@ -49,6 +50,14 @@ def get_re_v2_summary(db_path: Path | None = None) -> dict:
             "deliveries": count("re_deliveries"),
             "subgroups": subgroup_counts,
         }
+
+
+def list_re_v2_enterprises(db_path: Path | None = None) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT enterprise_id, enterprise_name, enterprise_type, contact_email, contact_phone, created_at_utc FROM re_enterprises ORDER BY created_at_utc DESC LIMIT 50"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def list_re_v2_accounts(db_path: Path | None = None) -> list[dict]:
@@ -63,6 +72,20 @@ def list_re_v2_assets(db_path: Path | None = None) -> list[dict]:
     with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT asset_id, asset_public_id, asset_name, asset_type, city, province, enterprise_id, asset_status, created_at_utc FROM re_assets ORDER BY created_at_utc DESC LIMIT 50"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def list_re_v2_account_asset_links(db_path: Path | None = None) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT l.link_id, l.account_id, a.user_email, l.asset_id, s.asset_public_id, l.assignment_role, l.created_at_utc
+            FROM re_account_asset_links l
+            JOIN re_accounts a ON a.account_id = l.account_id
+            JOIN re_assets s ON s.asset_id = l.asset_id
+            ORDER BY l.created_at_utc DESC LIMIT 50
+            """
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -160,6 +183,30 @@ def create_re_v2_asset(*, enterprise_id: str, asset_public_id: str, asset_type: 
     return asset_id
 
 
+def create_re_v2_account_asset_link(*, account_id: str, asset_id: str, assignment_role: str = 'assigned_operator', link_data: dict | None = None, db_path: Path | None = None) -> str:
+    link_id = _new_id('RAL')
+    now = _now_utc()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO re_account_asset_links (
+              link_id, account_id, asset_id, assignment_role, link_data_json, created_at_utc, updated_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                link_id,
+                account_id.strip(),
+                asset_id.strip(),
+                assignment_role.strip() or 'assigned_operator',
+                json.dumps(link_data or {}, ensure_ascii=True),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    return link_id
+
+
 def create_re_v2_visit(*, asset_id: str, created_by_account_id: str, visit_date_utc: str, visit_data: dict, db_path: Path | None = None) -> str:
     visit_id = _new_id("RVI")
     now = _now_utc()
@@ -187,3 +234,164 @@ def create_re_v2_visit(*, asset_id: str, created_by_account_id: str, visit_date_
         )
         conn.commit()
     return visit_id
+
+
+def reset_and_seed_re_v2_demo(db_path: Path | None = None) -> None:
+    target = Path(db_path) if db_path else DEFAULT_DB_PATH
+    if target.exists():
+        target.unlink()
+    ensure_real_estate_v2_schema(target)
+
+    demo = [
+        {
+            'enterprise_name': 'Andalucia Building Services',
+            'enterprise_type': 'real_estate',
+            'contact_email': 'ops@andaluciabuildingservices.demo',
+            'contact_phone': '+34 600 100 100',
+            'accounts': [
+                {
+                    'user_email': 'laura.adminfincas@andaluciabuildingservices.demo',
+                    'user_phone': '+34 600 100 101',
+                    'subgroup': 'building_admin',
+                    'preferred_language': 'es',
+                    'profile_data': {'scope_field': 'Residencial Aljarafe', 'reference_code': 'COM-ALJ-001'},
+                },
+                {
+                    'user_email': 'diego.property@andaluciabuildingservices.demo',
+                    'user_phone': '+34 600 100 102',
+                    'subgroup': 'property_manager',
+                    'preferred_language': 'es',
+                    'profile_data': {'scope_field': 'Premium Rentals', 'reference_code': 'PM-ALJ-002'},
+                },
+            ],
+            'assets': [
+                {
+                    'asset_public_id': 'RE2-PUB-0001',
+                    'asset_type': 'apartment_block',
+                    'asset_name': 'Residencial Aljarafe I',
+                    'address_line': 'Calle Azahar 14',
+                    'city': 'Tomares',
+                    'province': 'Sevilla',
+                    'postal_code': '41940',
+                    'asset_data': {'community_name': 'Residencial Aljarafe', 'building_block': 'Bloque A'},
+                },
+                {
+                    'asset_public_id': 'RE2-PUB-0002',
+                    'asset_type': 'rental_apartment',
+                    'asset_name': 'Apartamento Piloto 2B',
+                    'address_line': 'Avenida del Olivo 21',
+                    'city': 'Mairena del Aljarafe',
+                    'province': 'Sevilla',
+                    'postal_code': '41927',
+                    'asset_data': {'occupancy_status': 'vacant', 'portfolio_segment': 'Premium Rentals'},
+                },
+            ],
+        },
+        {
+            'enterprise_name': 'Iberia Portfolio Partners',
+            'enterprise_type': 'real_estate',
+            'contact_email': 'ops@iberiaportfolio.demo',
+            'contact_phone': '+34 600 200 200',
+            'accounts': [
+                {
+                    'user_email': 'marta.adminfincas@iberiaportfolio.demo',
+                    'user_phone': '+34 600 200 201',
+                    'subgroup': 'building_admin',
+                    'preferred_language': 'en',
+                    'profile_data': {'scope_field': 'Sevilla Centro', 'reference_code': 'COM-SVQ-010'},
+                },
+                {
+                    'user_email': 'alex.property@iberiaportfolio.demo',
+                    'user_phone': '+34 600 200 202',
+                    'subgroup': 'property_manager',
+                    'preferred_language': 'en',
+                    'profile_data': {'scope_field': 'Corporate Lets', 'reference_code': 'PM-SVQ-011'},
+                },
+            ],
+            'assets': [
+                {
+                    'asset_public_id': 'RE2-PUB-0003',
+                    'asset_type': 'mixed_use_building',
+                    'asset_name': 'Edificio Rioja 8',
+                    'address_line': 'Calle Rioja 8',
+                    'city': 'Sevilla',
+                    'province': 'Sevilla',
+                    'postal_code': '41001',
+                    'asset_data': {'community_name': 'Rioja 8', 'building_block': 'Principal'},
+                },
+                {
+                    'asset_public_id': 'RE2-PUB-0004',
+                    'asset_type': 'managed_flat',
+                    'asset_name': 'Corporate Flat Nervion',
+                    'address_line': 'Calle Luis de Morales 12',
+                    'city': 'Sevilla',
+                    'province': 'Sevilla',
+                    'postal_code': '41018',
+                    'asset_data': {'occupancy_status': 'occupied', 'portfolio_segment': 'Corporate Lets'},
+                },
+            ],
+        },
+    ]
+
+    enterprise_ids = []
+    account_ids = []
+    asset_ids = []
+    for pack in demo:
+        enterprise_id = create_re_v2_enterprise(
+            enterprise_name=pack['enterprise_name'],
+            enterprise_type=pack['enterprise_type'],
+            contact_email=pack['contact_email'],
+            contact_phone=pack['contact_phone'],
+            enterprise_data={},
+            db_path=target,
+        )
+        enterprise_ids.append(enterprise_id)
+
+        local_account_ids = []
+        for account in pack['accounts']:
+            account_id = create_re_v2_account(
+                user_email=account['user_email'],
+                user_phone=account['user_phone'],
+                user_role='operator',
+                subgroup=account['subgroup'],
+                enterprise_id=enterprise_id,
+                preferred_language=account['preferred_language'],
+                profile_data=account['profile_data'],
+                db_path=target,
+            )
+            local_account_ids.append(account_id)
+            account_ids.append(account_id)
+
+        local_asset_ids = []
+        for asset in pack['assets']:
+            asset_id = create_re_v2_asset(
+                enterprise_id=enterprise_id,
+                asset_public_id=asset['asset_public_id'],
+                asset_type=asset['asset_type'],
+                asset_name=asset['asset_name'],
+                address_line=asset['address_line'],
+                city=asset['city'],
+                province=asset['province'],
+                postal_code=asset['postal_code'],
+                country='ES',
+                asset_data=asset['asset_data'],
+                db_path=target,
+            )
+            local_asset_ids.append(asset_id)
+            asset_ids.append(asset_id)
+
+        for account_id, asset_id in zip(local_account_ids, local_asset_ids):
+            create_re_v2_account_asset_link(
+                account_id=account_id,
+                asset_id=asset_id,
+                assignment_role='primary_asset_owner_view',
+                link_data={'seeded_demo': True},
+                db_path=target,
+            )
+            create_re_v2_visit(
+                asset_id=asset_id,
+                created_by_account_id=account_id,
+                visit_date_utc=_now_utc(),
+                visit_data={'seeded_demo': True, 'workflow_note': 'Seeded V2 demo visit'},
+                db_path=target,
+            )
