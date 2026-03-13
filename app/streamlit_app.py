@@ -518,6 +518,38 @@ def _sync_auth_accounts(cfg: AuthShellConfig) -> None:
     )
 
 
+def _record_access_outbound_email(
+    *,
+    related_user_email: str | None,
+    event_type: str,
+    target_email: str | None,
+    subject: str,
+    body: str,
+    delivery_channel: str,
+    delivery_status: str,
+    from_email: str | None,
+) -> None:
+    ensure_communications_schema(COMMUNICATIONS_SQLITE_PATH)
+    with sqlite3.connect(str(COMMUNICATIONS_SQLITE_PATH)) as conn:
+        conn.execute(
+            "INSERT INTO comm_outbound_emails(related_entity_type,related_entity_id,to_email,subject,body_text,delivery_channel,delivery_status,provider_message_id,source_thread_id,from_email,from_name,sent_at_utc) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "auth_notification",
+                event_type[:120] if event_type else None,
+                (target_email or None),
+                (subject[:500] if subject else None),
+                (body[:12000] if body else None),
+                delivery_channel[:40] if delivery_channel else "none",
+                delivery_status[:40] if delivery_status else "queued",
+                None,
+                None,
+                (from_email or None),
+                "H-REVN",
+                datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z') if delivery_status == "sent" else None,
+            ),
+        )
+
+
 def _send_access_notification(
     *,
     related_user_email: str | None,
@@ -539,6 +571,16 @@ def _send_access_notification(
             error_detail=None,
             details_json=json.dumps({"reason": "missing_target_email"}),
         )
+        _record_access_outbound_email(
+            related_user_email=related_user_email,
+            event_type=event_type,
+            target_email=target_email,
+            subject=subject,
+            body=body,
+            delivery_channel="none",
+            delivery_status="not_configured",
+            from_email=None,
+        )
         return
 
     smtp_enabled = _secret_bool("SMTP_ENABLED", False)
@@ -559,6 +601,16 @@ def _send_access_notification(
             subject=subject,
             error_detail=None,
             details_json=json.dumps({"reason": "smtp_not_configured"}),
+        )
+        _record_access_outbound_email(
+            related_user_email=related_user_email,
+            event_type=event_type,
+            target_email=target_email,
+            subject=subject,
+            body=body,
+            delivery_channel="none",
+            delivery_status="not_configured",
+            from_email=mail_from or None,
         )
         return
 
@@ -583,6 +635,16 @@ def _send_access_notification(
         subject=result.subject,
         error_detail=result.error_detail,
         details_json=None,
+    )
+    _record_access_outbound_email(
+        related_user_email=related_user_email,
+        event_type=event_type,
+        target_email=result.target_email,
+        subject=result.subject,
+        body=body,
+        delivery_channel=result.delivery_channel,
+        delivery_status=result.delivery_status,
+        from_email=mail_from or None,
     )
 
 
