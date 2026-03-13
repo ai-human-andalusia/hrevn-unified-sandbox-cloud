@@ -380,3 +380,207 @@ def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: s
             )
         conn.commit()
     return observation_id
+
+
+def finalize_rwa_v1_capture_session(visit_id: str, *, db_path: Path | None = None) -> dict | None:
+    target = ensure_rwa_capture_schema(db_path)
+    now = _now_dt()
+    now_iso = _iso(now)
+    with _connect(target) as conn:
+        row = conn.execute("SELECT * FROM rwa_visits WHERE visit_id = ?", (visit_id,)).fetchone()
+        if not row:
+            return None
+        visit = dict(row)
+        started, ended, _count = _visit_photo_metrics(conn, visit_id, "direct_capture")
+        window_minutes = 0
+        if started and ended:
+            window_minutes = max(0, int((ended - started).total_seconds() // 60))
+        conn.execute(
+            """
+            UPDATE rwa_visits
+            SET direct_capture_session_status = 'closed',
+                direct_capture_closed_at_utc = COALESCE(direct_capture_closed_at_utc, ?),
+                direct_capture_closed_reason = COALESCE(direct_capture_closed_reason, 'manual_finish'),
+                direct_capture_window_minutes = ?,
+                visit_status = CASE
+                  WHEN visit_status IN ('issued', 'closed') THEN visit_status
+                  ELSE 'pending_validation'
+                END,
+                updated_at_utc = ?
+            WHERE visit_id = ?
+            """,
+            (now_iso, window_minutes, now_iso, visit_id),
+        )
+        conn.commit()
+        updated = conn.execute("SELECT * FROM rwa_visits WHERE visit_id = ?", (visit_id,)).fetchone()
+        return dict(updated) if updated else None
+
+
+def attach_rwa_v1_files_to_visit(*, visit_id: str, uploaded_files: list, db_path: Path | None = None) -> int:
+    target = ensure_rwa_capture_schema(db_path)
+    if not uploaded_files:
+        return 0
+    now = _now_utc()
+    inserted = 0
+    with _connect(target) as conn:
+        visit_row = conn.execute("SELECT * FROM rwa_visits WHERE visit_id = ?", (visit_id,)).fetchone()
+        if not visit_row:
+            raise ValueError(f"Visit not found: {visit_id}")
+        visit = dict(visit_row)
+        asset_id = str(visit.get("asset_id") or "")
+        existing_photo_names = {
+            str(row[0] or "").strip().lower()
+            for row in conn.execute(
+                "SELECT photo_filename FROM rwa_photos WHERE visit_id = ?",
+                (visit_id,),
+            ).fetchall()
+        }
+        existing_attachment_names = {
+            str(row[0] or "").strip().lower()
+            for row in conn.execute(
+                "SELECT attachment_filename FROM rwa_attachments WHERE visit_id = ?",
+                (visit_id,),
+            ).fetchall()
+        }
+        seen_names: set[str] = set()
+        for uploaded in uploaded_files:
+            filename = str(getattr(uploaded, "name", "") or "").strip()
+            payload = uploaded.getvalue()
+            mime = str(getattr(uploaded, "type", "") or "")
+            lowered = filename.lower()
+            if not filename:
+                continue
+            if lowered in seen_names or lowered in existing_photo_names or lowered in existing_attachment_names:
+                continue
+            seen_names.add(lowered)
+            if filename.lower().endswith((".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".bmp", ".tif", ".tiff")):
+                conn.execute(
+                    """
+                    INSERT INTO rwa_photos (
+                      photo_id, visit_id, asset_id, observation_id, photo_filename, photo_hash_sha256,
+                      ingest_mode, photo_status, captured_at_utc, added_to_record_at_utc, photo_data_json
+                    ) VALUES (?, ?, ?, NULL, ?, ?, 'manual_upload', 'active', NULL, ?, ?)
+                    """,
+                    (
+                        _new_id("RWAP"),
+                        visit_id,
+                        asset_id,
+                        filename,
+                        _sha256_bytes(payload),
+                        now,
+                        json.dumps({"size_bytes": len(payload), "mime": mime, "upload_mode": "manual_upload"}),
+                    ),
+                )
+            else:
+                attachment_kind = "pdf" if filename.lower().endswith(".pdf") else "document"
+                conn.execute(
+                    """
+                    INSERT INTO rwa_attachments (
+                      attachment_id, visit_id, asset_id, observation_id, attachment_filename, attachment_hash_sha256,
+                      attachment_kind, attachment_status, added_to_record_at_utc, attachment_data_json
+                    ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'active', ?, ?)
+                    """,
+                    (
+                        _new_id("RWAT"),
+                        visit_id,
+                        asset_id,
+                        filename,
+                        _sha256_bytes(payload),
+                        attachment_kind,
+                        now,
+                        json.dumps({"size_bytes": len(payload), "mime": mime, "added_mode": "manual_upload"}),
+                    ),
+                )
+            inserted += 1
+        if inserted:
+            conn.execute(
+                """
+                UPDATE rwa_visits
+                SET updated_at_utc = ?,
+                    visit_status = CASE
+                      WHEN visit_status IN ('issued', 'closed') THEN visit_status
+                      ELSE 'pending_validation'
+                    END,
+                    visit_data_json = json_patch(COALESCE(visit_data_json, '{}'), json(?))
+                WHERE visit_id = ?
+                """,
+                (now, json.dumps({"has_manual_additions": True}), visit_id),
+            )
+        conn.commit()
+    return inserted
+
+
+def validate_and_issue_rwa_v1_visit(*, visit_id: str, pre_issue_comments: str = "", db_path: Path | None = None) -> dict | None:
+    target = ensure_rwa_capture_schema(db_path)
+    now = _now_utc()
+    with _connect(target) as conn:
+        visit_row = conn.execute("SELECT * FROM rwa_visits WHERE visit_id = ?", (visit_id,)).fetchone()
+        if not visit_row:
+            raise ValueError(f"Visit not found: {visit_id}")
+        visit = dict(visit_row)
+        asset_id = str(visit.get("asset_id") or "")
+        issuance_id = _new_id("RWAI")
+        observations = conn.execute(
+            "SELECT observation_id FROM rwa_observations WHERE visit_id = ?",
+            (visit_id,),
+        ).fetchall()
+        photos = conn.execute(
+            "SELECT photo_filename, photo_hash_sha256 FROM rwa_photos WHERE visit_id = ? ORDER BY added_to_record_at_utc, captured_at_utc",
+            (visit_id,),
+        ).fetchall()
+        attachments = conn.execute(
+            "SELECT attachment_filename, attachment_hash_sha256 FROM rwa_attachments WHERE visit_id = ? ORDER BY added_to_record_at_utc",
+            (visit_id,),
+        ).fetchall()
+        manifest_payload = {
+            "visit_id": visit_id,
+            "asset_id": asset_id,
+            "issued_at_utc": now,
+            "observation_count": len(observations),
+            "photo_count": len(photos),
+            "attachment_count": len(attachments),
+            "pre_issue_comments": pre_issue_comments.strip(),
+        }
+        manifest_hash = hashlib.sha256(json.dumps(manifest_payload, sort_keys=True).encode("utf-8")).hexdigest()
+        root_material = "|".join(
+            [visit_id, asset_id, manifest_hash]
+            + [f"{row[0]}:{row[1]}" for row in photos]
+            + [f"{row[0]}:{row[1]}" for row in attachments]
+        )
+        root_hash = hashlib.sha256(root_material.encode("utf-8")).hexdigest()
+        conn.execute(
+            """
+            INSERT INTO rwa_issuances (
+              issuance_id, visit_id, asset_id, certificate_status, zip_status, issued_at_utc,
+              root_hash_sha256, manifest_hash_sha256, issuance_data_json
+            ) VALUES (?, ?, ?, 'issued', 'issued', ?, ?, ?, ?)
+            """,
+            (
+                issuance_id,
+                visit_id,
+                asset_id,
+                now,
+                root_hash,
+                manifest_hash,
+                json.dumps({"pre_issue_comments": pre_issue_comments.strip(), "issued_from": "rwa_review_panel"}),
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE rwa_visits
+            SET visit_status = 'issued',
+                review_status = 'validated',
+                issuance_status = 'issued',
+                updated_at_utc = ?,
+                visit_data_json = json_patch(COALESCE(visit_data_json, '{}'), json(?))
+            WHERE visit_id = ?
+            """,
+            (
+                now,
+                json.dumps({"pre_issue_comments": pre_issue_comments.strip(), "issued_at_utc": now}),
+                visit_id,
+            ),
+        )
+        conn.commit()
+        issued = conn.execute("SELECT * FROM rwa_issuances WHERE issuance_id = ?", (issuance_id,)).fetchone()
+        return dict(issued) if issued else None
