@@ -75,6 +75,7 @@ from common.services.rwa_v1_store import (
     list_rwa_v1_observations_raw,
     list_rwa_v1_photos_raw,
     list_rwa_v1_visits_raw,
+    refresh_rwa_v1_capture_session,
 )
 
 from common.services.real_estate_v2_store import (
