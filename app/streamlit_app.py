@@ -4081,14 +4081,155 @@ def render_genius_operations_placeholder() -> None:
 
 
 def render_telegram_panel() -> None:
-    st.subheader("Telegram")
-    status = get_telegram_connector_status(load_common_config())
-    st.dataframe([
-        {"FIELD": "Enabled", "VALUE": "yes" if status.enabled else "no"},
-        {"FIELD": "Bot token", "VALUE": "set" if status.bot_token_set else "missing"},
-        {"FIELD": "Chat id", "VALUE": "set" if status.chat_id_set else "missing"},
-        {"FIELD": "Ready", "VALUE": "yes" if status.ready else "no"},
-    ], use_container_width=True, hide_index=True)
+    cfg = load_common_config()
+    status = get_telegram_connector_status(cfg)
+    snapshot = get_recent_auth_snapshot(AUTH_ACCESS_SQLITE_PATH, limit=200)
+    telegram_rows = [
+        row for row in snapshot.get("notifications", [])
+        if (row.get("delivery_channel") or "").lower() == "telegram"
+    ]
+
+    def _telegram_type(row: dict) -> str:
+        event_type = (row.get("event_type") or "").strip()
+        if event_type == "manual_test":
+            return "manual_test"
+        if "digest" in event_type:
+            return "digest"
+        return "security_alert"
+
+    def _telegram_category(row: dict) -> str:
+        return (row.get("event_type") or "unknown").strip() or "unknown"
+
+    def _detail_text(row: dict) -> str:
+        if row.get("error_detail"):
+            return str(row.get("error_detail"))
+        if row.get("subject"):
+            return str(row.get("subject"))
+        return "-"
+
+    telegram_rows_sorted = sorted(
+        telegram_rows,
+        key=lambda r: str(r.get("created_at_utc") or ""),
+        reverse=True,
+    )
+    latest_row = telegram_rows_sorted[0] if telegram_rows_sorted else None
+    last_sent_row = next((r for r in telegram_rows_sorted if (r.get("delivery_status") or "").lower() == "sent"), None)
+    sent_24h = 0
+    failed_24h = 0
+    security_alerts_24h = 0
+    manual_tests_24h = 0
+    digests_24h = 0
+    now_dt = _utc_now_datetime()
+    for row in telegram_rows_sorted:
+        created_dt = _parse_iso_datetime(str(row.get("created_at_utc") or ""))
+        if not created_dt or (now_dt - created_dt).total_seconds() > 86400:
+            continue
+        delivery_status = (row.get("delivery_status") or "").lower()
+        row_type = _telegram_type(row)
+        if delivery_status == "sent":
+            sent_24h += 1
+        elif delivery_status in {"failed", "not_configured"}:
+            failed_24h += 1
+        if row_type == "security_alert":
+            security_alerts_24h += 1
+        elif row_type == "manual_test":
+            manual_tests_24h += 1
+        elif row_type == "digest":
+            digests_24h += 1
+
+    st.markdown("#### Telegram")
+    top_left, top_right = st.columns(2)
+    with top_left:
+        tl_a, tl_b, tl_c = st.columns(3)
+        tl_a.metric("BOT STATUS", "READY" if status.ready else ("PARTIAL" if status.enabled else "OFF"))
+        tl_b.metric("DELIVERY STATUS", (last_sent_row.get("delivery_status") if last_sent_row else "no_activity").upper())
+        tl_c.metric("TARGET CHAT", "SET" if status.chat_id_set else "MISSING")
+    with top_right:
+        tr_a, tr_b, tr_c = st.columns(3)
+        tr_a.metric("LAST SENT", str(last_sent_row.get("created_at_utc") or "-") if last_sent_row else "-")
+        tr_b.metric("LAST ALERT", str(latest_row.get("created_at_utc") or "-") if latest_row else "-")
+        tr_c.metric("MODE", "INTERNAL ALERTS" if status.ready else ("NOT CONFIGURED" if not status.enabled else "PARTIAL"))
+
+    mid_left, mid_right = st.columns([1, 1])
+    with mid_left:
+        ma, mb, mc, md = st.columns(4)
+        ma.metric("SENT 24H", sent_24h)
+        mb.metric("FAILED 24H", failed_24h)
+        mc.metric("SECURITY ALERTS", security_alerts_24h)
+        md.metric("MANUAL TESTS", manual_tests_24h)
+        st.dataframe(
+            [
+                {"METRIC": "DIGESTS 24H", "VALUE": digests_24h},
+                {"METRIC": "RECENT EVENTS", "VALUE": len(telegram_rows_sorted)},
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+    with mid_right:
+        _render_panel_section_title("Configuration")
+        st.dataframe(
+            [
+                {"FIELD": "Telegram enabled", "VALUE": "yes" if status.enabled else "no"},
+                {"FIELD": "Bot token present", "VALUE": "yes" if status.bot_token_set else "no"},
+                {"FIELD": "Chat ID present", "VALUE": "yes" if status.chat_id_set else "no"},
+                {"FIELD": "Alert routing active", "VALUE": "yes" if status.ready else "no"},
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    _render_panel_section_title("Recent activity")
+    if telegram_rows_sorted:
+        activity_rows = [
+            {
+                "TIME": row.get("created_at_utc") or "-",
+                "TYPE": _telegram_type(row).upper(),
+                "CATEGORY": _telegram_category(row).upper(),
+                "STATUS": (row.get("delivery_status") or "-").upper(),
+                "TARGET": row.get("target_email") or "telegram_admin_channel",
+                "DETAIL": _detail_text(row),
+            }
+            for row in telegram_rows_sorted[:20]
+        ]
+        st.dataframe(activity_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No Telegram activity recorded yet.")
+
+    _render_panel_section_title("Controlled test")
+    with st.form("telegram_controlled_test_form", clear_on_submit=False):
+        test_message = st.text_input(
+            "Test message",
+            value="H-REVN Telegram controlled test",
+            key="telegram_controlled_test_message",
+        )
+        confirmed = st.checkbox(
+            "I confirm this is a manual Telegram test",
+            value=False,
+            key="telegram_controlled_test_confirm",
+        )
+        send_clicked = st.form_submit_button("Send test message", use_container_width=True)
+
+    if send_clicked:
+        if not confirmed:
+            st.warning("Confirm the manual test before sending.")
+        elif not status.ready:
+            st.error("Telegram is not ready.")
+        else:
+            ok, detail = send_controlled_test_message(test_message.strip() or "H-REVN Telegram controlled test")
+            log_auth_notification_event(
+                AUTH_ACCESS_SQLITE_PATH,
+                related_user_email=str(st.session_state.get("auth_user_email") or ""),
+                target_email="telegram_admin_channel",
+                event_type="manual_test",
+                delivery_channel="telegram",
+                delivery_status="sent" if ok else "failed",
+                subject=test_message.strip() or "H-REVN Telegram controlled test",
+                error_detail="" if ok else detail,
+            )
+            if ok:
+                st.success("Telegram test sent.")
+            else:
+                st.error(f"Telegram test failed: {detail}")
 def render_schema_explorer() -> None:
     st.subheader("Schema Explorer")
     st.caption("Read-only browsing of schema artifacts inside the sandbox.")
