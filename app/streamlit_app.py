@@ -452,12 +452,24 @@ def _send_real_estate_delivery_email(*, target_email: str, subject: str, body: s
         subject=subject,
         body=body,
     )
-    return {
+    payload = {
         "delivery_status": result.delivery_status,
         "delivery_channel": result.delivery_channel,
         "target_email": result.target_email,
         "error_detail": result.error_detail or "",
     }
+    if payload["delivery_status"] != "sent":
+        _send_telegram_security_alert(
+            "email_delivery_failed",
+            (
+                "H-REVN operations alert: certification email delivery failed.\n"
+                f"Target: {target_email}\n"
+                f"Subject: {subject}\n"
+                f"Status: {payload['delivery_status']}\n"
+                f"Detail: {payload['error_detail'] or 'none'}"
+            ),
+        )
+    return payload
 
 
 def _load_auth_shell_config() -> AuthShellConfig:
@@ -678,6 +690,22 @@ def _send_telegram_security_alert(event_type: str, message: str) -> None:
         error_detail=None if ok else detail,
         details_json=json.dumps({"message": message}),
     )
+
+
+def _latest_notification_timestamp(*event_types: str) -> str:
+    snapshot = get_recent_auth_snapshot(AUTH_ACCESS_SQLITE_PATH, limit=200)
+    for row in snapshot.get("notifications", []):
+        if str(row.get("event_type") or "") in event_types:
+            return str(row.get("created_at_utc") or "")
+    return ""
+
+
+def _should_emit_recovery_alert(failure_event: str, recovery_event: str) -> bool:
+    latest_failure = _latest_notification_timestamp(failure_event)
+    if not latest_failure:
+        return False
+    latest_recovery = _latest_notification_timestamp(recovery_event)
+    return not latest_recovery or latest_recovery < latest_failure
 
 
 def _send_admin_security_email_alert(event_type: str, subject: str, body: str) -> None:
@@ -2126,49 +2154,61 @@ def _render_real_estate_workspace(snapshot, context: dict, workspace: dict | Non
         st.text_input("Delivery target email", value=delivery_target or "", disabled=True)
         trigger_disabled = not readiness.issuance_ready
         if st.button("Validate and certify", use_container_width=True, disabled=trigger_disabled, key=f"re_validate_certify_{visit.get('visit_id')}"):
-            with st.spinner("Certification request accepted. Running AI review and issuance checks in the background..."):
-                review_result = review_real_estate_certification(
-                    workspace=workspace or {},
-                    provider=provider_choice.selected,
-                    model=cfg.openai_model,
-                    openai_api_key=_openai_api_key_for("production"),
-                    openai_api_base_url=cfg.openai_api_base_url,
-                    blockchain_target=cfg.blockchain_target,
-                    blockchain_enabled=cfg.blockchain_enabled,
-                ).to_dict()
-                preview = build_real_estate_end_to_end_preview(snapshot, str(visit.get("visit_id") or "")) if review_result.get("approved") else None
-                review_result["preview"] = preview
-                review_result["delivery_target_email"] = delivery_target
-                if review_result.get("approved"):
-                    success_body = (
-                        "Your certification request has passed H-REVN AI review and integrity checks.\n\n"
+            try:
+                with st.spinner("Certification request accepted. Running AI review and issuance checks in the background..."):
+                    review_result = review_real_estate_certification(
+                        workspace=workspace or {},
+                        provider=provider_choice.selected,
+                        model=cfg.openai_model,
+                        openai_api_key=_openai_api_key_for("production"),
+                        openai_api_base_url=cfg.openai_api_base_url,
+                        blockchain_target=cfg.blockchain_target,
+                        blockchain_enabled=cfg.blockchain_enabled,
+                    ).to_dict()
+                    preview = build_real_estate_end_to_end_preview(snapshot, str(visit.get("visit_id") or "")) if review_result.get("approved") else None
+                    review_result["preview"] = preview
+                    review_result["delivery_target_email"] = delivery_target
+                    if review_result.get("approved"):
+                        success_body = (
+                            "Your certification request has passed H-REVN AI review and integrity checks.\n\n"
+                            f"Visit: {visit.get('visit_id')}\n"
+                            f"Asset: {asset.get('asset_public_id') or asset.get('asset_id')}\n"
+                            f"Root hash: {(preview or {}).get('certificate_preview', {}).get('root_hash_sha256', 'pending')}\n"
+                            f"Blockchain target: {cfg.blockchain_target} ({review_result.get('anchor_status')})\n\n"
+                            "A confirmation package can now be delivered from the operator workspace."
+                        )
+                        review_result["email_result"] = _send_real_estate_delivery_email(
+                            target_email=delivery_target,
+                            subject=f"H-REVN certification ready | {visit.get('visit_id')}",
+                            body=success_body,
+                        )
+                    else:
+                        reasons = review_result.get("blocking_reasons") or ["AI review flagged the request for manual revision."]
+                        failure_body = (
+                            "Your certification request could not be completed automatically.\n\n"
+                            f"Visit: {visit.get('visit_id')}\n"
+                            f"Asset: {asset.get('asset_public_id') or asset.get('asset_id')}\n\n"
+                            "Please review the case in the operator workspace. Blocking reasons:\n- "
+                            + "\n- ".join(str(item) for item in reasons)
+                        )
+                        review_result["email_result"] = _send_real_estate_delivery_email(
+                            target_email=delivery_target,
+                            subject=f"H-REVN certification needs review | {visit.get('visit_id')}",
+                            body=failure_body,
+                        )
+                    st.session_state[review_key] = review_result
+                st.rerun()
+            except Exception as exc:
+                _send_telegram_security_alert(
+                    "ai_review_failed",
+                    (
+                        "H-REVN operations alert: AI review failed during certification.\n"
                         f"Visit: {visit.get('visit_id')}\n"
                         f"Asset: {asset.get('asset_public_id') or asset.get('asset_id')}\n"
-                        f"Root hash: {(preview or {}).get('certificate_preview', {}).get('root_hash_sha256', 'pending')}\n"
-                        f"Blockchain target: {cfg.blockchain_target} ({review_result.get('anchor_status')})\n\n"
-                        "A confirmation package can now be delivered from the operator workspace."
-                    )
-                    review_result["email_result"] = _send_real_estate_delivery_email(
-                        target_email=delivery_target,
-                        subject=f"H-REVN certification ready | {visit.get('visit_id')}",
-                        body=success_body,
-                    )
-                else:
-                    reasons = review_result.get("blocking_reasons") or ["AI review flagged the request for manual revision."]
-                    failure_body = (
-                        "Your certification request could not be completed automatically.\n\n"
-                        f"Visit: {visit.get('visit_id')}\n"
-                        f"Asset: {asset.get('asset_public_id') or asset.get('asset_id')}\n\n"
-                        "Please review the case in the operator workspace. Blocking reasons:\n- "
-                        + "\n- ".join(str(item) for item in reasons)
-                    )
-                    review_result["email_result"] = _send_real_estate_delivery_email(
-                        target_email=delivery_target,
-                        subject=f"H-REVN certification needs review | {visit.get('visit_id')}",
-                        body=failure_body,
-                    )
-                st.session_state[review_key] = review_result
-            st.rerun()
+                        f"Detail: {exc}"
+                    ),
+                )
+                st.error(f"AI review failed: {exc}")
 
         if trigger_disabled:
             st.warning("This visit must satisfy the issuance readiness rules before AI review can start.")
@@ -2790,9 +2830,29 @@ def _render_rwa_placeholder() -> None:
                 st.success(f'Comentarios guardados y anexos añadidos: {inserted}')
                 st.rerun()
             if review_right.button('Validar y firmar', key='rwa_review_issue', type='primary', use_container_width=True):
-                validate_and_issue_rwa_v1_visit(visit_id=selected_visit_id, pre_issue_comments=current_comments)
-                st.success(f'Visit validated and issued: {selected_visit_id}')
-                st.rerun()
+                try:
+                    validate_and_issue_rwa_v1_visit(visit_id=selected_visit_id, pre_issue_comments=current_comments)
+                    _send_telegram_security_alert(
+                        "visit_validated_and_issued",
+                        (
+                            "H-REVN operations alert: RWA visit validated and issued.\n"
+                            f"Visit: {selected_visit_id}\n"
+                            f"Asset: {str((selected_asset or {}).get('asset_public_id') or (selected_asset or {}).get('asset_name') or '-')}"
+                        ),
+                    )
+                    st.success(f'Visit validated and issued: {selected_visit_id}')
+                    st.rerun()
+                except Exception as exc:
+                    _send_telegram_security_alert(
+                        "certificate_issuance_failed",
+                        (
+                            "H-REVN operations alert: RWA visit issuance failed.\n"
+                            f"Visit: {selected_visit_id}\n"
+                            f"Asset: {str((selected_asset or {}).get('asset_public_id') or (selected_asset or {}).get('asset_name') or '-')}\n"
+                            f"Detail: {exc}"
+                        ),
+                    )
+                    st.error(f'Visit issuance failed: {exc}')
             summary_rows = []
             for observation in selected_visit_observations:
                 observation_id = str(observation.get('observation_id') or '')
@@ -3875,8 +3935,23 @@ def render_email_panel() -> None:
                 max_results=20,
             )
             sync_notice = f"Auto-sync ok. inbox fetched={sync_result.fetched}, inbox inserted={sync_result.inserted}, sent fetched={sync_result.sent_fetched}, sent inserted={sync_result.sent_inserted}"
+            if _should_emit_recovery_alert("gmail_sync_failed", "gmail_sync_recovered"):
+                _send_telegram_security_alert(
+                    "gmail_sync_recovered",
+                    (
+                        "H-REVN communications alert: Gmail sync recovered.\n"
+                        f"Inbox fetched: {sync_result.fetched}\n"
+                        f"Inbox inserted: {sync_result.inserted}\n"
+                        f"Sent fetched: {sync_result.sent_fetched}\n"
+                        f"Sent inserted: {sync_result.sent_inserted}"
+                    ),
+                )
         except Exception as exc:
             sync_error = f"Auto-sync failed: {exc}"
+            _send_telegram_security_alert(
+                "gmail_sync_failed",
+                f"H-REVN communications alert: Gmail auto-sync failed.\nDetail: {exc}",
+            )
 
     top_left, top_right = st.columns([0.72, 0.28])
     with top_left:
@@ -3907,8 +3982,23 @@ def render_email_panel() -> None:
                 st.success(
                     f"Gmail sync ok. inbox fetched={sync_result.fetched}, inbox inserted={sync_result.inserted}, sent fetched={sync_result.sent_fetched}, sent inserted={sync_result.sent_inserted}, support={sync_result.support_tickets}, business={sync_result.sales_leads}, general={sync_result.general_emails}"
                 )
+                if _should_emit_recovery_alert("gmail_sync_failed", "gmail_sync_recovered"):
+                    _send_telegram_security_alert(
+                        "gmail_sync_recovered",
+                        (
+                            "H-REVN communications alert: Gmail sync recovered.\n"
+                            f"Inbox fetched: {sync_result.fetched}\n"
+                            f"Inbox inserted: {sync_result.inserted}\n"
+                            f"Sent fetched: {sync_result.sent_fetched}\n"
+                            f"Sent inserted: {sync_result.sent_inserted}"
+                        ),
+                    )
             except Exception as exc:
                 st.error(f"Gmail sync failed: {exc}")
+                _send_telegram_security_alert(
+                    "gmail_sync_failed",
+                    f"H-REVN communications alert: Gmail sync failed.\nDetail: {exc}",
+                )
 
     snapshot = load_communications_snapshot(COMMUNICATIONS_SQLITE_PATH)
 
