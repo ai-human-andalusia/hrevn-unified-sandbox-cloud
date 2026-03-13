@@ -43,6 +43,7 @@ from common.services.auth_access_sqlite import (
     register_failed_login_with_window,
     register_failed_ip_attempt,
     reactivate_account,
+    resolve_ip_locality,
     revoke_all_active_sessions_for_user,
     revoke_auth_session,
     reset_local_password,
@@ -558,6 +559,12 @@ def _load_aer_signing_config() -> AERSigningConfig:
         signature_profile=_secret_value("HREVN_SIGNING_PROFILE", "hrevn_signing_v1"),
         algorithm="ed25519",
     )
+
+
+def _ip_locality_label(ip_public: str) -> str:
+    locality = resolve_ip_locality(AUTH_ACCESS_SQLITE_PATH, ip_public=ip_public or "unknown")
+    label = str(locality.get("locality_label") or "").strip()
+    return label or "unknown"
 
 
 def _get_auth_request_context() -> AuthRequestContext:
@@ -1579,6 +1586,7 @@ def render_access_security_panel() -> None:
                             "EVENT": row.get("event_type") or "-",
                             "RESULT": "success" if int(row.get("success_flag") or 0) else "failure",
                             "IP": row.get("ip_public") or "-",
+                            "LOCATION": _ip_locality_label(row.get("ip_public") or "unknown"),
                             "REASON": row.get("failure_reason") or "-",
                         }
                         for row in related_events
@@ -1593,6 +1601,7 @@ def render_access_security_panel() -> None:
                             "SESSION": row.get("session_id") or "-",
                             "STATE": row.get("session_state") or "-",
                             "IP": row.get("ip_public") or "-",
+                            "LOCATION": _ip_locality_label(row.get("ip_public") or "unknown"),
                             "CREATED": row.get("created_at_utc") or "-",
                             "LAST SEEN": row.get("last_seen_at_utc") or "-",
                             "REVOKED": row.get("revoked_at_utc") or "-",
@@ -1636,7 +1645,7 @@ def render_access_security_panel() -> None:
                     st.info("No notification history for this account yet.")
             if related_ips:
                 st.markdown("##### Related IPs")
-                st.dataframe([{"IP": ip_value} for ip_value in related_ips], use_container_width=True, hide_index=True)
+                st.dataframe([{"IP": ip_value, "LOCATION": _ip_locality_label(ip_value)} for ip_value in related_ips], use_container_width=True, hide_index=True)
         else:
             st.info("No accounts registered yet.")
 
@@ -1652,6 +1661,7 @@ def render_access_security_panel() -> None:
                     "ROLE": row.get("user_role") or "-",
                     "IDENTIFIER": row.get("identifier_attempted") or "-",
                     "IP": row.get("ip_public") or "-",
+                    "LOCATION": _ip_locality_label(row.get("ip_public") or "unknown"),
                     "RESULT": "success" if int(row.get("success_flag") or 0) else "failure",
                     "REASON": row.get("failure_reason") or "-",
                 }
@@ -1670,6 +1680,7 @@ def render_access_security_panel() -> None:
                     "ROLE": row.get("user_role") or "-",
                     "STATE": row.get("session_state") or "-",
                     "IP": row.get("ip_public") or "-",
+                    "LOCATION": _ip_locality_label(row.get("ip_public") or "unknown"),
                     "CREATED": row.get("created_at_utc") or "-",
                     "LAST SEEN": row.get("last_seen_at_utc") or "-",
                     "REVOKED": row.get("revoked_at_utc") or "-",
@@ -1723,6 +1734,7 @@ def render_access_security_panel() -> None:
             ip_rows = [
                 {
                     "IP": row.get("ip_public") or "-",
+                    "LOCATION": _ip_locality_label(row.get("ip_public") or "unknown"),
                     "FAILED LOGINS": row.get("failed_login_count") or 0,
                     "LAST FAILED": row.get("last_failed_login_at_utc") or "-",
                     "COOLDOWN": row.get("cooldown_until_utc") or "-",

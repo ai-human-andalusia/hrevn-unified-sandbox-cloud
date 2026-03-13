@@ -3,8 +3,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
+import json
 import secrets
 import sqlite3
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -168,6 +171,16 @@ def ensure_auth_access_db(db_path: Path) -> None:
               updated_at_utc TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS auth_ip_locations (
+              ip_public TEXT PRIMARY KEY,
+              country_name TEXT,
+              region_name TEXT,
+              city_name TEXT,
+              locality_label TEXT,
+              lookup_status TEXT NOT NULL DEFAULT 'unknown',
+              resolved_at_utc TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_auth_accounts_status ON auth_accounts(account_status);
             CREATE INDEX IF NOT EXISTS idx_auth_local_verified ON auth_local_credentials(email_verified_flag);
             CREATE INDEX IF NOT EXISTS idx_auth_login_events_created_at ON auth_login_events(created_at_utc);
@@ -179,11 +192,90 @@ def ensure_auth_access_db(db_path: Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_auth_notifications_created_at ON auth_notification_events(created_at_utc);
             CREATE INDEX IF NOT EXISTS idx_auth_ip_controls_cooldown ON auth_ip_controls(cooldown_until_utc);
             CREATE INDEX IF NOT EXISTS idx_auth_ip_controls_blocked ON auth_ip_controls(blocked_until_utc);
+            CREATE INDEX IF NOT EXISTS idx_auth_ip_locations_resolved_at ON auth_ip_locations(resolved_at_utc);
             '''
         )
         cols = {row['name'] for row in conn.execute("PRAGMA table_info(auth_accounts)").fetchall()}
         if 'preferred_language' not in cols:
             conn.execute("ALTER TABLE auth_accounts ADD COLUMN preferred_language TEXT NOT NULL DEFAULT 'en'")
+
+
+def _is_public_ip(ip_public: str) -> bool:
+    if not ip_public or ip_public == "unknown":
+        return False
+    try:
+        ip_obj = ipaddress.ip_address(ip_public)
+        return not (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_reserved)
+    except Exception:
+        return False
+
+
+def _lookup_ip_locality_remote(ip_public: str) -> dict[str, Any]:
+    if not _is_public_ip(ip_public):
+        return {
+            "ip_public": ip_public,
+            "country_name": None,
+            "region_name": None,
+            "city_name": None,
+            "locality_label": "unknown",
+            "lookup_status": "not_public",
+            "resolved_at_utc": _utc_now(),
+        }
+    try:
+        with urllib.request.urlopen(f"https://ipwho.is/{ip_public}", timeout=8) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        if not bool(payload.get("success")):
+            return {
+                "ip_public": ip_public,
+                "country_name": None,
+                "region_name": None,
+                "city_name": None,
+                "locality_label": "unknown",
+                "lookup_status": "failed",
+                "resolved_at_utc": _utc_now(),
+            }
+        city = str(payload.get("city") or "").strip() or None
+        region = str(payload.get("region") or "").strip() or None
+        country = str(payload.get("country") or "").strip() or None
+        parts = [part for part in [city, region, country] if part]
+        return {
+            "ip_public": ip_public,
+            "country_name": country,
+            "region_name": region,
+            "city_name": city,
+            "locality_label": " / ".join(parts) if parts else "unknown",
+            "lookup_status": "resolved",
+            "resolved_at_utc": _utc_now(),
+        }
+    except Exception:
+        return {
+            "ip_public": ip_public,
+            "country_name": None,
+            "region_name": None,
+            "city_name": None,
+            "locality_label": "unknown",
+            "lookup_status": "failed",
+            "resolved_at_utc": _utc_now(),
+        }
+
+
+def resolve_ip_locality(db_path: Path, *, ip_public: str) -> dict[str, Any]:
+    ensure_auth_access_db(db_path)
+    ip_public = (ip_public or "unknown").strip()
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT ip_public, country_name, region_name, city_name, locality_label, lookup_status, resolved_at_utc FROM auth_ip_locations WHERE ip_public=?",
+            (ip_public,),
+        ).fetchone()
+        if row is not None:
+            return dict(row)
+    resolved = _lookup_ip_locality_remote(ip_public)
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO auth_ip_locations(ip_public,country_name,region_name,city_name,locality_label,lookup_status,resolved_at_utc) VALUES(?,?,?,?,?,?,?) ON CONFLICT(ip_public) DO UPDATE SET country_name=excluded.country_name, region_name=excluded.region_name, city_name=excluded.city_name, locality_label=excluded.locality_label, lookup_status=excluded.lookup_status, resolved_at_utc=excluded.resolved_at_utc",
+            (resolved["ip_public"], resolved["country_name"], resolved["region_name"], resolved["city_name"], resolved["locality_label"], resolved["lookup_status"], resolved["resolved_at_utc"]),
+        )
+    return resolved
 
 
 def upsert_auth_account(
