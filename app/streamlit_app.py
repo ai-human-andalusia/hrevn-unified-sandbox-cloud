@@ -2766,14 +2766,12 @@ def _render_rwa_placeholder() -> None:
             stored_comments = str(visit_data.get('pre_issue_comments') or '')
             if st.session_state.get('rwa_review_current_visit') != selected_visit_id:
                 st.session_state['rwa_review_current_visit'] = selected_visit_id
-                st.session_state[comment_widget_key] = stored_comments
+                st.session_state[comment_widget_key] = ""
             elif comment_widget_key not in st.session_state:
-                st.session_state[comment_widget_key] = stored_comments
+                st.session_state[comment_widget_key] = ""
             if st.session_state.get('rwa_review_reload_visit') == selected_visit_id:
-                st.session_state[comment_widget_key] = stored_comments
+                st.session_state[comment_widget_key] = ""
                 st.session_state['rwa_review_reload_visit'] = ""
-            elif not str(st.session_state.get(comment_widget_key) or '').strip() and stored_comments:
-                st.session_state[comment_widget_key] = stored_comments
             current_comments = st.text_area('Comentarios antes de la emisión', key=comment_widget_key, height=120)
             review_uploads = st.file_uploader(
                 'Añadir fotos o documentación adicional',
