@@ -432,8 +432,6 @@ def finalize_rwa_v1_capture_session(visit_id: str, *, db_path: Path | None = Non
 
 def attach_rwa_v1_files_to_visit(*, visit_id: str, uploaded_files: list, pre_issue_comments: str = "", db_path: Path | None = None) -> int:
     target = ensure_rwa_capture_schema(db_path)
-    if not uploaded_files:
-        return 0
     now = _now_utc()
     inserted = 0
     with _connect(target) as conn:
