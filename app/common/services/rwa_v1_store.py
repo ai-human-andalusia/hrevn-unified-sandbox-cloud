@@ -167,7 +167,8 @@ def list_rwa_v1_visits_raw(db_path: Path | None = None) -> list[dict]:
             SELECT visit_id, asset_id, created_by_account_id, visit_date_utc, visit_status, review_status,
                    issuance_status, direct_capture_session_status, direct_capture_started_at_utc,
                    direct_capture_last_activity_at_utc, direct_capture_closed_at_utc,
-                   direct_capture_closed_reason, direct_capture_window_minutes, created_at_utc
+                   direct_capture_closed_reason, direct_capture_window_minutes, visit_data_json,
+                   created_at_utc, updated_at_utc
             FROM rwa_visits
             ORDER BY created_at_utc DESC
             """
