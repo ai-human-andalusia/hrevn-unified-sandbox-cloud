@@ -2762,7 +2762,11 @@ def _render_rwa_placeholder() -> None:
             st.text_input('Asset', value=str((selected_asset or {}).get('asset_name') or ''), disabled=True, key='rwa_review_asset_name')
             comment_widget_key = f"rwa_pre_issue_comments::{selected_visit_id}"
             stored_comments = str(visit_data.get('pre_issue_comments') or '')
-            st.session_state[comment_widget_key] = stored_comments
+            if st.session_state.get('rwa_review_current_visit') != selected_visit_id:
+                st.session_state['rwa_review_current_visit'] = selected_visit_id
+                st.session_state[comment_widget_key] = stored_comments
+            elif comment_widget_key not in st.session_state:
+                st.session_state[comment_widget_key] = stored_comments
             st.text_area('Comentarios antes de la emisión', key=comment_widget_key, height=120)
             review_uploads = st.file_uploader(
                 'Añadir fotos o documentación adicional',
