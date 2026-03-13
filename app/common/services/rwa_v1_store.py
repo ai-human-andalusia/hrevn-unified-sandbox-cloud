@@ -4,7 +4,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .rwa_v1_schema import DEFAULT_DB_PATH, ensure_rwa_v1_schema
@@ -18,9 +18,33 @@ RWA_ASSET_CATEGORIES = (
     "rural_land",
 )
 
+_CAPTURE_TIMEOUT_MINUTES = 10
+
+
+def _now_dt() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 def _now_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _iso(_now_dt())
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text).astimezone(timezone.utc)
+    except ValueError:
+        return None
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -38,9 +62,33 @@ def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _ensure_visit_capture_columns(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(rwa_visits)").fetchall()}
+    wanted = {
+        "direct_capture_session_status": "TEXT NOT NULL DEFAULT 'open'",
+        "direct_capture_started_at_utc": "TEXT",
+        "direct_capture_last_activity_at_utc": "TEXT",
+        "direct_capture_closed_at_utc": "TEXT",
+        "direct_capture_closed_reason": "TEXT",
+        "direct_capture_window_minutes": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for name, ddl in wanted.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE rwa_visits ADD COLUMN {name} {ddl}")
+
+
+def ensure_rwa_capture_schema(db_path: Path | None = None) -> Path:
+    target = ensure_rwa_v1_schema(db_path)
+    with sqlite3.connect(target) as conn:
+        _ensure_visit_capture_columns(conn)
+        conn.commit()
+    return target
+
+
 def ensure_rwa_v1_demo_seed(db_path: Path | None = None) -> None:
+    target = ensure_rwa_capture_schema(db_path)
     now = _now_utc()
-    with _connect(db_path) as conn:
+    with _connect(target) as conn:
         count = int(conn.execute("SELECT COUNT(*) FROM rwa_assets").fetchone()[0] or 0)
         if count:
             return
@@ -99,7 +147,8 @@ def ensure_rwa_v1_demo_seed(db_path: Path | None = None) -> None:
 
 
 def list_rwa_v1_assets(db_path: Path | None = None) -> list[dict]:
-    with _connect(db_path) as conn:
+    target = ensure_rwa_capture_schema(db_path)
+    with _connect(target) as conn:
         rows = conn.execute(
             """
             SELECT asset_id, asset_public_id, asset_type, asset_name, asset_status, asset_data_json, created_at_utc
@@ -111,10 +160,14 @@ def list_rwa_v1_assets(db_path: Path | None = None) -> list[dict]:
 
 
 def list_rwa_v1_visits_raw(db_path: Path | None = None) -> list[dict]:
-    with _connect(db_path) as conn:
+    target = ensure_rwa_capture_schema(db_path)
+    with _connect(target) as conn:
         rows = conn.execute(
             """
-            SELECT visit_id, asset_id, created_by_account_id, visit_date_utc, visit_status, review_status, issuance_status, created_at_utc
+            SELECT visit_id, asset_id, created_by_account_id, visit_date_utc, visit_status, review_status,
+                   issuance_status, direct_capture_session_status, direct_capture_started_at_utc,
+                   direct_capture_last_activity_at_utc, direct_capture_closed_at_utc,
+                   direct_capture_closed_reason, direct_capture_window_minutes, created_at_utc
             FROM rwa_visits
             ORDER BY created_at_utc DESC
             """
@@ -123,7 +176,8 @@ def list_rwa_v1_visits_raw(db_path: Path | None = None) -> list[dict]:
 
 
 def list_rwa_v1_observations_raw(db_path: Path | None = None) -> list[dict]:
-    with _connect(db_path) as conn:
+    target = ensure_rwa_capture_schema(db_path)
+    with _connect(target) as conn:
         rows = conn.execute(
             """
             SELECT observation_id, visit_id, asset_id, lpi_code, severity_0_5, observation_description, row_status, observation_data_json, created_at_utc
@@ -135,7 +189,8 @@ def list_rwa_v1_observations_raw(db_path: Path | None = None) -> list[dict]:
 
 
 def list_rwa_v1_photos_raw(db_path: Path | None = None) -> list[dict]:
-    with _connect(db_path) as conn:
+    target = ensure_rwa_capture_schema(db_path)
+    with _connect(target) as conn:
         rows = conn.execute(
             """
             SELECT photo_id, visit_id, asset_id, observation_id, photo_filename, photo_hash_sha256, ingest_mode, photo_status, captured_at_utc, added_to_record_at_utc, photo_data_json
@@ -147,14 +202,18 @@ def list_rwa_v1_photos_raw(db_path: Path | None = None) -> list[dict]:
 
 
 def create_rwa_v1_visit(*, asset_id: str, visit_id: str, visit_date_utc: str | None = None, visit_data: dict | None = None, db_path: Path | None = None) -> str:
+    target = ensure_rwa_capture_schema(db_path)
     now = _now_utc()
-    with _connect(db_path) as conn:
+    with _connect(target) as conn:
         conn.execute(
             """
             INSERT OR IGNORE INTO rwa_visits (
               visit_id, asset_id, created_by_account_id, visit_date_utc, visit_status, review_status,
-              issuance_status, visit_data_json, created_at_utc, updated_at_utc
-            ) VALUES (?, ?, NULL, ?, 'work', 'pending', 'not_issued', ?, ?, ?)
+              issuance_status, direct_capture_session_status, direct_capture_started_at_utc,
+              direct_capture_last_activity_at_utc, direct_capture_closed_at_utc,
+              direct_capture_closed_reason, direct_capture_window_minutes,
+              visit_data_json, created_at_utc, updated_at_utc
+            ) VALUES (?, ?, NULL, ?, 'work', 'pending', 'not_issued', 'open', NULL, NULL, NULL, NULL, 0, ?, ?, ?)
             """,
             (
                 visit_id,
@@ -169,9 +228,76 @@ def create_rwa_v1_visit(*, asset_id: str, visit_id: str, visit_date_utc: str | N
     return visit_id
 
 
-def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: str, lpi_code: str, severity_0_5: int, observation_description: str, coordinator_notes: str, uploaded_files: list, db_path: Path | None = None) -> str:
-    now = _now_utc()
-    with _connect(db_path) as conn:
+def _visit_photo_metrics(conn: sqlite3.Connection, visit_id: str, ingest_mode: str | None = None) -> tuple[datetime | None, datetime | None, int]:
+    if ingest_mode:
+        rows = conn.execute(
+            "SELECT captured_at_utc, added_to_record_at_utc FROM rwa_photos WHERE visit_id = ? AND ingest_mode = ? ORDER BY COALESCE(captured_at_utc, added_to_record_at_utc) ASC",
+            (visit_id, ingest_mode),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT captured_at_utc, added_to_record_at_utc FROM rwa_photos WHERE visit_id = ? ORDER BY COALESCE(captured_at_utc, added_to_record_at_utc) ASC",
+            (visit_id,),
+        ).fetchall()
+    timestamps = []
+    for row in rows:
+        dt = _parse_iso(row[0] or row[1])
+        if dt:
+            timestamps.append(dt)
+    if not timestamps:
+        return None, None, 0
+    return timestamps[0], timestamps[-1], len(timestamps)
+
+
+def refresh_rwa_v1_capture_session(visit_id: str, *, timeout_minutes: int = _CAPTURE_TIMEOUT_MINUTES, db_path: Path | None = None) -> dict | None:
+    target = ensure_rwa_capture_schema(db_path)
+    with _connect(target) as conn:
+        row = conn.execute("SELECT * FROM rwa_visits WHERE visit_id = ?", (visit_id,)).fetchone()
+        if not row:
+            return None
+        visit = dict(row)
+        status = str(visit.get("direct_capture_session_status") or "open")
+        if status != "open":
+            return visit
+        last_activity = _parse_iso(visit.get("direct_capture_last_activity_at_utc"))
+        if not last_activity:
+            return visit
+        now = _now_dt()
+        if now < last_activity + timedelta(minutes=timeout_minutes):
+            return visit
+        started, ended, _count = _visit_photo_metrics(conn, visit_id, "direct_capture")
+        window_minutes = 0
+        if started and ended:
+            window_minutes = max(0, int((ended - started).total_seconds() // 60))
+        now_iso = _iso(now)
+        conn.execute(
+            """
+            UPDATE rwa_visits
+            SET direct_capture_session_status = 'closed',
+                direct_capture_closed_at_utc = ?,
+                direct_capture_closed_reason = 'capture_timeout',
+                direct_capture_window_minutes = ?,
+                updated_at_utc = ?
+            WHERE visit_id = ?
+            """,
+            (now_iso, window_minutes, now_iso, visit_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM rwa_visits WHERE visit_id = ?", (visit_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: str, lpi_code: str, severity_0_5: int, observation_description: str, coordinator_notes: str, uploaded_files: list, upload_mode: str = 'direct_capture', db_path: Path | None = None) -> str:
+    target = ensure_rwa_capture_schema(db_path)
+    now_dt = _now_dt()
+    now = _iso(now_dt)
+    with _connect(target) as conn:
+        visit_row = conn.execute("SELECT * FROM rwa_visits WHERE visit_id = ?", (visit_id,)).fetchone()
+        if not visit_row:
+            raise ValueError(f"Visit not found: {visit_id}")
+        visit = dict(visit_row)
+        if upload_mode == 'direct_capture' and str(visit.get('direct_capture_session_status') or 'open') != 'open':
+            upload_mode = 'manual_upload'
         conn.execute(
             """
             INSERT INTO rwa_observations (
@@ -186,7 +312,7 @@ def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: s
                 lpi_code,
                 int(severity_0_5),
                 observation_description.strip(),
-                json.dumps({"coordinator_notes": coordinator_notes.strip()}),
+                json.dumps({"coordinator_notes": coordinator_notes.strip(), "upload_mode": upload_mode}),
                 now,
                 now,
             ),
@@ -198,7 +324,7 @@ def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: s
                 INSERT INTO rwa_photos (
                   photo_id, visit_id, asset_id, observation_id, photo_filename, photo_hash_sha256,
                   ingest_mode, photo_status, captured_at_utc, added_to_record_at_utc, photo_data_json
-                ) VALUES (?, ?, ?, ?, ?, ?, 'manual_upload', 'active', ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
                 """,
                 (
                     _new_id("RWAP"),
@@ -207,10 +333,38 @@ def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: s
                     observation_id,
                     uploaded.name,
                     _sha256_bytes(payload),
+                    upload_mode,
+                    now if upload_mode == 'direct_capture' else None,
                     now,
-                    now,
-                    json.dumps({"size_bytes": len(payload), "mime": getattr(uploaded, 'type', '')}),
+                    json.dumps({"size_bytes": len(payload), "mime": getattr(uploaded, 'type', ''), "upload_mode": upload_mode}),
                 ),
+            )
+        if upload_mode == 'direct_capture' and uploaded_files:
+            started, ended, _count = _visit_photo_metrics(conn, visit_id, 'direct_capture')
+            started_iso = _iso(started) if started else now
+            last_iso = _iso(ended) if ended else now
+            window_minutes = max(0, int((ended - started).total_seconds() // 60)) if started and ended else 0
+            conn.execute(
+                """
+                UPDATE rwa_visits
+                SET direct_capture_session_status = 'open',
+                    direct_capture_started_at_utc = COALESCE(direct_capture_started_at_utc, ?),
+                    direct_capture_last_activity_at_utc = ?,
+                    direct_capture_window_minutes = ?,
+                    updated_at_utc = ?
+                WHERE visit_id = ?
+                """,
+                (started_iso, last_iso, window_minutes, now, visit_id),
+            )
+        elif upload_mode == 'manual_upload' and uploaded_files:
+            conn.execute(
+                """
+                UPDATE rwa_visits
+                SET updated_at_utc = ?,
+                    visit_data_json = json_patch(COALESCE(visit_data_json, '{}'), json(?))
+                WHERE visit_id = ?
+                """,
+                (now, json.dumps({"has_manual_uploads": True}), visit_id),
             )
         conn.commit()
     return observation_id

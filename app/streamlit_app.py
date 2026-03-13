@@ -2295,6 +2295,12 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
     current_asset_id = st.session_state.get(asset_key, "")
     current_asset_label = next((label for label, value in asset_options.items() if value == current_asset_id), asset_labels[0])
 
+    current_visit_id_for_refresh = st.session_state.get(visit_draft_key, "")
+    if current_visit_id_for_refresh:
+        refreshed_visit = refresh_rwa_v1_capture_session(current_visit_id_for_refresh)
+        if refreshed_visit:
+            all_visits = list_rwa_v1_visits_raw()
+
     left, right = st.columns(2)
     with left:
         action_left, action_right = st.columns(2)
@@ -2471,6 +2477,12 @@ def _render_rwa_placeholder() -> None:
     current_asset_id = st.session_state.get(asset_key, "")
     current_asset_label = next((label for label, value in asset_options.items() if value == current_asset_id), asset_labels[0])
 
+    current_visit_id_for_refresh = st.session_state.get(visit_draft_key, "")
+    if current_visit_id_for_refresh:
+        refreshed_visit = refresh_rwa_v1_capture_session(current_visit_id_for_refresh)
+        if refreshed_visit:
+            all_visits = list_rwa_v1_visits_raw()
+
     left, right = st.columns(2)
     with left:
         action_left, action_right = st.columns(2)
@@ -2544,17 +2556,32 @@ def _render_rwa_placeholder() -> None:
 
     current_visit_photos = [item for item in all_photos if str(item.get('visit_id') or '') == display_visit_id]
     existing_photo_names = {str(item.get('photo_filename') or '').strip().lower() for item in current_visit_photos}
+    current_visit_row = next((item for item in all_visits if str(item.get('visit_id') or '') == display_visit_id), None)
+    capture_status = str((current_visit_row or {}).get('direct_capture_session_status') or 'open')
+    capture_window_minutes = int((current_visit_row or {}).get('direct_capture_window_minutes') or 0)
+    direct_capture_count = len([item for item in current_visit_photos if str(item.get('ingest_mode') or '') == 'direct_capture'])
+    manual_upload_count = len([item for item in current_visit_photos if str(item.get('ingest_mode') or '') == 'manual_upload'])
+    upload_mode = 'direct_capture' if capture_status == 'open' else 'manual_upload'
 
     with right:
-        metric_left, metric_right = st.columns([0.6, 0.4])
+        metric_left, metric_right, metric_right_b = st.columns([0.45, 0.275, 0.275])
         with metric_left:
             st.markdown("<div style='display:flex;align-items:center;gap:12px;margin-top:4px;margin-bottom:10px;'><div style='font-family:Menlo,Monaco,monospace;font-size:13px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.06em;'>Registered photos</div><div style='font-family:Menlo,Monaco,monospace;font-size:22px;font-weight:800;color:#0f172a;'>" + str(len(current_visit_photos)) + "</div></div>", unsafe_allow_html=True)
+        with metric_right:
+            st.metric('Direct capture', direct_capture_count)
+        with metric_right_b:
+            st.metric('Manual upload', manual_upload_count)
+        if capture_status == 'open':
+            st.info(f'Direct capture session open. It will close automatically after 10 minutes without a new capture. Current capture window: {capture_window_minutes} min.')
+        else:
+            st.warning('Direct capture session closed. New files will be registered as manual uploads. This will not block issuance, but it must be reflected in the final output.')
         uploaded_files = st.file_uploader(
             "Upload photos",
             type=["jpg", "jpeg", "png", "heic", "heif", "webp", "bmp", "tif", "tiff"],
             accept_multiple_files=True,
             key="rwa_uploader",
             label_visibility="collapsed",
+            help=("Files are treated as direct capture while the session is open, and as manual upload after the session closes."),
         )
         uploaded_files = uploaded_files or []
         uploaded_names = [str(item.name or '').strip() for item in uploaded_files]
@@ -2601,6 +2628,7 @@ def _render_rwa_placeholder() -> None:
                     observation_description=observation_description,
                     coordinator_notes=coordinator_notes,
                     uploaded_files=uploaded_files,
+                    upload_mode=upload_mode,
                 )
                 st.success(f"Observation saved: {observation_display}")
                 st.session_state[observation_draft_key] = _build_observation_draft_id(display_visit_id)
