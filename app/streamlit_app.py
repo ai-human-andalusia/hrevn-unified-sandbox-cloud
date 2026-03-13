@@ -96,6 +96,7 @@ from common.services.real_estate_v2_store import (
 from common.services.communications_store import (
     ensure_communications_schema,
     load_communications_snapshot,
+    get_latest_sync_run,
     sync_gmail_inbox,
 )
 from common.services.telegram_connector import (
@@ -3519,6 +3520,31 @@ def render_email_panel() -> None:
     cfg = load_common_config()
     mail_status = get_mail_connector_status(cfg)
 
+    sync_notice = None
+    sync_error = None
+    latest_sync = get_latest_sync_run(COMMUNICATIONS_SQLITE_PATH)
+    should_auto_sync = False
+    if mail_status.inbound_sync_ready:
+        if not latest_sync or not latest_sync.get("created_at_utc"):
+            should_auto_sync = True
+        else:
+            last_dt = _parse_iso_datetime(str(latest_sync.get("created_at_utc") or ""))
+            should_auto_sync = not last_dt or (_utc_now() - last_dt).total_seconds() >= 1800
+    if should_auto_sync:
+        try:
+            sync_result = sync_gmail_inbox(
+                COMMUNICATIONS_SQLITE_PATH,
+                gmail_client_id=_secret_value("GMAIL_CLIENT_ID", ""),
+                gmail_client_secret=_secret_value("GMAIL_CLIENT_SECRET", ""),
+                gmail_refresh_token=_secret_value("GMAIL_REFRESH_TOKEN", ""),
+                gmail_mailbox_user=_secret_value("GMAIL_MAILBOX_USER", "me") or "me",
+                gmail_sync_query=_secret_value("GMAIL_SYNC_QUERY", "is:unread") or "is:unread",
+                max_results=20,
+            )
+            sync_notice = f"Auto-sync ok. inbox fetched={sync_result.fetched}, inbox inserted={sync_result.inserted}, sent fetched={sync_result.sent_fetched}, sent inserted={sync_result.sent_inserted}"
+        except Exception as exc:
+            sync_error = f"Auto-sync failed: {exc}"
+
     top_left, top_right = st.columns([0.72, 0.28])
     with top_left:
         st.dataframe([
@@ -3527,7 +3553,12 @@ def render_email_panel() -> None:
             {"FIELD": "Preferred channel", "VALUE": mail_status.preferred_channel},
             {"FIELD": "Recovery-ready", "VALUE": "yes" if mail_status.recovery_ready else "no"},
             {"FIELD": "Source", "VALUE": str(COMMUNICATIONS_SQLITE_PATH)},
+            {"FIELD": "Last sync", "VALUE": (latest_sync or {}).get("created_at_utc") or "never"},
         ], use_container_width=True, hide_index=True)
+        if sync_notice:
+            st.success(sync_notice)
+        if sync_error:
+            st.error(sync_error)
     with top_right:
         if st.button("Sync Gmail inbox", use_container_width=True, disabled=not mail_status.inbound_sync_ready):
             try:

@@ -229,6 +229,16 @@ def load_communications_snapshot(db_path: Path) -> CommunicationsSnapshot:
     )
 
 
+def get_latest_sync_run(db_path: Path) -> dict[str, Any] | None:
+    ensure_communications_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT provider,status,fetched_count,inserted_count,support_count,business_count,general_count,detail_text,created_at_utc FROM comm_sync_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def _base64url_decode(input_value: str = "") -> str:
     s = input_value.replace("-", "+").replace("_", "/")
     pad = "=" * ((4 - len(s) % 4) % 4)
