@@ -2772,6 +2772,8 @@ def _render_rwa_placeholder() -> None:
             if st.session_state.get('rwa_review_reload_visit') == selected_visit_id:
                 st.session_state[comment_widget_key] = stored_comments
                 st.session_state['rwa_review_reload_visit'] = ""
+            elif not str(st.session_state.get(comment_widget_key) or '').strip() and stored_comments:
+                st.session_state[comment_widget_key] = stored_comments
             current_comments = st.text_area('Comentarios antes de la emisión', key=comment_widget_key, height=120)
             review_uploads = st.file_uploader(
                 'Añadir fotos o documentación adicional',
@@ -2854,7 +2856,7 @@ def _render_rwa_placeholder() -> None:
                     d1.text_input('Tipo', value=str(selected_artifact.get('TYPE') or ''), disabled=True, key='rwa_selected_artifact_type')
                     d2.text_input('Archivo', value=str(selected_artifact.get('FILENAME') or ''), disabled=True, key='rwa_selected_artifact_filename')
                     d3.text_input('Añadido', value=str(selected_artifact.get('ADDED AT') or ''), disabled=True, key='rwa_selected_artifact_added')
-                    st.text_area('Comentario guardado para esta visita', value=current_comments, disabled=True, height=100, key='rwa_selected_artifact_comments')
+                    st.text_area('Comentario guardado para esta visita', value=stored_comments, disabled=True, height=100, key='rwa_selected_artifact_comments')
                     replacement = st.file_uploader(
                         'Reemplazar archivo seleccionado',
                         type=['jpg','jpeg','png','heic','heif','webp','bmp','tif','tiff','pdf','doc','docx'],
