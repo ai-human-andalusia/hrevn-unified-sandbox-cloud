@@ -126,6 +126,19 @@ LEGACY_GOV_ROOT = Path("/Users/miguelmiguel/CODEX/HREVN CODEX GOV")
 LEGACY_PTDG_ROOT = Path("/Users/miguelmiguel/CODEX/Physical-to-Digital Gap")
 
 
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _utc_now_datetime() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _render_console_table_html(df: pd.DataFrame, *, total_row_index: int | None = None) -> None:
     styled = df.style.set_table_styles([
         {"selector": "table", "props": [("width", "100%"), ("border-collapse", "collapse"), ("table-layout", "fixed"), ("font-family", "Menlo, Monaco, monospace"), ("font-size", "12px")]},
