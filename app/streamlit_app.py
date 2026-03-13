@@ -2851,12 +2851,39 @@ def _render_rwa_placeholder() -> None:
                 removable_rows = artifact_editor[artifact_editor['REMOVE'] == True] if isinstance(artifact_editor, pd.DataFrame) else pd.DataFrame()
                 if len(selected_artifact_rows) == 1:
                     selected_artifact = selected_artifact_rows.iloc[0]
+                    selected_artifact_comment = stored_comments
+                    if str(selected_artifact.get('TYPE') or '') == 'photo':
+                        selected_photo = next(
+                            (
+                                item for item in selected_visit_photos
+                                if str(item.get('photo_id') or '') == str(selected_artifact.get('ID') or '')
+                            ),
+                            {},
+                        )
+                        try:
+                            selected_photo_data = json.loads(str(selected_photo.get('photo_data_json') or '{}'))
+                        except Exception:
+                            selected_photo_data = {}
+                        selected_artifact_comment = str(selected_photo_data.get('review_comment') or stored_comments)
+                    elif str(selected_artifact.get('TYPE') or '') == 'attachment':
+                        selected_attachment = next(
+                            (
+                                item for item in selected_visit_attachments
+                                if str(item.get('attachment_id') or '') == str(selected_artifact.get('ID') or '')
+                            ),
+                            {},
+                        )
+                        try:
+                            selected_attachment_data = json.loads(str(selected_attachment.get('attachment_data_json') or '{}'))
+                        except Exception:
+                            selected_attachment_data = {}
+                        selected_artifact_comment = str(selected_attachment_data.get('review_comment') or stored_comments)
                     st.markdown('#### Detalle del anexo seleccionado')
                     d1, d2, d3 = st.columns(3)
                     d1.text_input('Tipo', value=str(selected_artifact.get('TYPE') or ''), disabled=True, key='rwa_selected_artifact_type')
                     d2.text_input('Archivo', value=str(selected_artifact.get('FILENAME') or ''), disabled=True, key='rwa_selected_artifact_filename')
                     d3.text_input('Añadido', value=str(selected_artifact.get('ADDED AT') or ''), disabled=True, key='rwa_selected_artifact_added')
-                    st.text_area('Comentario guardado para esta visita', value=stored_comments, disabled=True, height=100, key='rwa_selected_artifact_comments')
+                    st.text_area('Comentario guardado para este anexo', value=selected_artifact_comment, disabled=True, height=100, key='rwa_selected_artifact_comments')
                     replacement = st.file_uploader(
                         'Reemplazar archivo seleccionado',
                         type=['jpg','jpeg','png','heic','heif','webp','bmp','tif','tiff','pdf','doc','docx'],

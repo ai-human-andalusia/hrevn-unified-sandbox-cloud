@@ -481,7 +481,12 @@ def attach_rwa_v1_files_to_visit(*, visit_id: str, uploaded_files: list, pre_iss
                         filename,
                         _sha256_bytes(payload),
                         now,
-                        json.dumps({"size_bytes": len(payload), "mime": mime, "upload_mode": "manual_upload"}),
+                        json.dumps({
+                            "size_bytes": len(payload),
+                            "mime": mime,
+                            "upload_mode": "manual_upload",
+                            "review_comment": pre_issue_comments.strip(),
+                        }),
                     ),
                 )
             else:
@@ -501,7 +506,12 @@ def attach_rwa_v1_files_to_visit(*, visit_id: str, uploaded_files: list, pre_iss
                         _sha256_bytes(payload),
                         attachment_kind,
                         now,
-                        json.dumps({"size_bytes": len(payload), "mime": mime, "added_mode": "manual_upload"}),
+                        json.dumps({
+                            "size_bytes": len(payload),
+                            "mime": mime,
+                            "added_mode": "manual_upload",
+                            "review_comment": pre_issue_comments.strip(),
+                        }),
                     ),
                 )
             inserted += 1
