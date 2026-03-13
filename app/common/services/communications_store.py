@@ -30,6 +30,8 @@ class CommunicationsSyncResult:
     support_tickets: int
     sales_leads: int
     general_emails: int
+    sent_fetched: int
+    sent_inserted: int
 
 
 SCHEMA_SQL = """
@@ -110,10 +112,14 @@ CREATE TABLE IF NOT EXISTS comm_outbound_emails (
   delivery_channel TEXT NOT NULL DEFAULT 'smtp',
   delivery_status TEXT NOT NULL DEFAULT 'queued',
   provider_message_id TEXT,
+  source_thread_id TEXT,
+  from_email TEXT,
+  from_name TEXT,
   sent_at_utc TEXT,
   created_at_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_comm_outbound_emails_delivery_status ON comm_outbound_emails(delivery_status);
+CREATE INDEX IF NOT EXISTS idx_comm_outbound_emails_provider_message_id ON comm_outbound_emails(provider_message_id);
 
 CREATE TABLE IF NOT EXISTS comm_sync_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +140,14 @@ def ensure_communications_schema(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(db_path)) as conn:
         conn.executescript(SCHEMA_SQL)
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(comm_outbound_emails)").fetchall()}
+        if "source_thread_id" not in existing:
+            conn.execute("ALTER TABLE comm_outbound_emails ADD COLUMN source_thread_id TEXT")
+        if "from_email" not in existing:
+            conn.execute("ALTER TABLE comm_outbound_emails ADD COLUMN from_email TEXT")
+        if "from_name" not in existing:
+            conn.execute("ALTER TABLE comm_outbound_emails ADD COLUMN from_name TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_comm_outbound_emails_provider_message_id ON comm_outbound_emails(provider_message_id)")
         conn.commit()
 
 
@@ -310,6 +324,53 @@ def _insert_sales_lead(conn: sqlite3.Connection, *, source_email_id: int, from_e
     conn.execute("UPDATE comm_sales_leads SET lead_code=?, updated_at_utc=CURRENT_TIMESTAMP WHERE id=?", (lead_code, lead_id))
 
 
+def _sync_gmail_sent(conn: sqlite3.Connection, *, access_token: str, user: str, max_results: int) -> tuple[int, int]:
+    listing = _gmail_api(
+        f"users/{user}/messages?q={urllib.parse.quote('in:sent', safe='')}&maxResults={max(1, min(int(max_results), 100))}",
+        access_token=access_token,
+    )
+    messages = listing.get("messages") or []
+    fetched = len(messages)
+    inserted = 0
+    for message in messages:
+        msg_id = str(message.get("id") or "")
+        if not msg_id:
+            continue
+        exists = conn.execute(
+            "SELECT 1 FROM comm_outbound_emails WHERE provider_message_id=? LIMIT 1",
+            (msg_id,),
+        ).fetchone()
+        if exists:
+            continue
+        full = _gmail_api(
+            f"users/{user}/messages/{urllib.parse.quote(msg_id, safe='')}?format=full",
+            access_token=access_token,
+        )
+        payload = full.get("payload") or {}
+        headers = payload.get("headers") or []
+        subject = _first_header(headers, "Subject")
+        to_raw = _first_header(headers, "To")
+        from_raw = _first_header(headers, "From")
+        date_raw = _first_header(headers, "Date")
+        body_text = _extract_text_from_payload(payload) or str(full.get("snippet") or "")
+        to_email = to_raw
+        if "<" in to_raw and ">" in to_raw:
+            _, _, right = to_raw.partition("<")
+            to_email = right.split(">", 1)[0].strip()
+        from_email = from_raw
+        from_name = ""
+        if "<" in from_raw and ">" in from_raw:
+            left, _, right = from_raw.partition("<")
+            from_name = left.strip().strip('"')
+            from_email = right.split(">", 1)[0].strip()
+        conn.execute(
+            "INSERT INTO comm_outbound_emails(related_entity_type,related_entity_id,to_email,subject,body_text,delivery_channel,delivery_status,provider_message_id,source_thread_id,from_email,from_name,sent_at_utc) VALUES(NULL,NULL,?,?,?,'gmail','sent',?,?,?,?,?)",
+            (to_email[:240] if to_email else None, subject[:500] if subject else None, body_text[:12000] if body_text else None, msg_id, str(full.get('threadId') or '') or None, from_email[:240] if from_email else None, from_name[:180] if from_name else None, date_raw[:120] if date_raw else None),
+        )
+        inserted += 1
+    return fetched, inserted
+
+
 def sync_gmail_inbox(db_path: Path, *, gmail_client_id: str, gmail_client_secret: str, gmail_refresh_token: str, gmail_mailbox_user: str = "me", gmail_sync_query: str = "is:unread", max_results: int = 20) -> CommunicationsSyncResult:
     ensure_communications_schema(db_path)
     if not gmail_client_id or not gmail_client_secret or not gmail_refresh_token:
@@ -319,7 +380,7 @@ def sync_gmail_inbox(db_path: Path, *, gmail_client_id: str, gmail_client_secret
     query = urllib.parse.quote(gmail_sync_query or "is:unread", safe="")
     listing = _gmail_api(f"users/{user}/messages?q={query}&maxResults={max(1, min(int(max_results), 100))}", access_token=access_token)
     messages = listing.get("messages") or []
-    result = {"fetched": len(messages), "inserted": 0, "support_tickets": 0, "sales_leads": 0, "general_emails": 0}
+    result = {"fetched": len(messages), "inserted": 0, "support_tickets": 0, "sales_leads": 0, "general_emails": 0, "sent_fetched": 0, "sent_inserted": 0}
     with sqlite3.connect(str(db_path)) as conn:
         for message in messages:
             msg_id = str(message.get("id") or "")
@@ -355,6 +416,9 @@ def sync_gmail_inbox(db_path: Path, *, gmail_client_id: str, gmail_client_secret
                 result['sales_leads'] += 1
             else:
                 result['general_emails'] += 1
-        conn.execute("INSERT INTO comm_sync_runs(provider,status,fetched_count,inserted_count,support_count,business_count,general_count,detail_text) VALUES(?,?,?,?,?,?,?,?)", ('gmail','ok',result['fetched'],result['inserted'],result['support_tickets'],result['sales_leads'],result['general_emails'],'manual_streamlit_sync'))
+        sent_fetched, sent_inserted = _sync_gmail_sent(conn, access_token=access_token, user=user, max_results=max_results)
+        result['sent_fetched'] = sent_fetched
+        result['sent_inserted'] = sent_inserted
+        conn.execute("INSERT INTO comm_sync_runs(provider,status,fetched_count,inserted_count,support_count,business_count,general_count,detail_text) VALUES(?,?,?,?,?,?,?,?)", ('gmail','ok',result['fetched'] + result['sent_fetched'],result['inserted'] + result['sent_inserted'],result['support_tickets'],result['sales_leads'],result['general_emails'],f"manual_streamlit_sync inbox={result['fetched']} sent={result['sent_fetched']}"))
         conn.commit()
     return CommunicationsSyncResult(**result)

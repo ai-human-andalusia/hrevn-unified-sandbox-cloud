@@ -3541,7 +3541,7 @@ def render_email_panel() -> None:
                     max_results=20,
                 )
                 st.success(
-                    f"Gmail sync ok. fetched={sync_result.fetched}, inserted={sync_result.inserted}, support={sync_result.support_tickets}, business={sync_result.sales_leads}, general={sync_result.general_emails}"
+                    f"Gmail sync ok. inbox fetched={sync_result.fetched}, inbox inserted={sync_result.inserted}, sent fetched={sync_result.sent_fetched}, sent inserted={sync_result.sent_inserted}, support={sync_result.support_tickets}, business={sync_result.sales_leads}, general={sync_result.general_emails}"
                 )
             except Exception as exc:
                 st.error(f"Gmail sync failed: {exc}")
