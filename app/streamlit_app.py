@@ -66,23 +66,7 @@ from common.services.real_estate_sqlite import (
 )
 from common.services.real_estate_ai_review import review_real_estate_certification
 from common.services.rwa_v1_schema import ensure_rwa_v1_schema
-from common.services.rwa_v1_store import (
-    RWA_ASSET_CATEGORIES,
-    attach_rwa_v1_files_to_visit,
-    create_rwa_v1_observation,
-    create_rwa_v1_visit,
-    ensure_rwa_v1_demo_seed,
-    finalize_rwa_v1_capture_session,
-    list_rwa_v1_assets,
-    list_rwa_v1_attachments_raw,
-    list_rwa_v1_observations_raw,
-    list_rwa_v1_photos_raw,
-    list_rwa_v1_visits_raw,
-    remove_rwa_v1_review_artifact,
-    replace_rwa_v1_review_artifact,
-    refresh_rwa_v1_capture_session,
-    validate_and_issue_rwa_v1_visit,
-)
+from common.services import rwa_v1_store as rwa_store
 
 from common.services.real_estate_v2_store import (
     create_re_v2_account,
@@ -113,6 +97,23 @@ from common.services.telegram_connector import (
     send_controlled_test_message,
 )
 from common.tools.secret_hygiene_scan import run_secret_hygiene_scan
+
+
+RWA_ASSET_CATEGORIES = rwa_store.RWA_ASSET_CATEGORIES
+attach_rwa_v1_files_to_visit = rwa_store.attach_rwa_v1_files_to_visit
+create_rwa_v1_observation = rwa_store.create_rwa_v1_observation
+create_rwa_v1_visit = rwa_store.create_rwa_v1_visit
+ensure_rwa_v1_demo_seed = rwa_store.ensure_rwa_v1_demo_seed
+finalize_rwa_v1_capture_session = rwa_store.finalize_rwa_v1_capture_session
+list_rwa_v1_assets = rwa_store.list_rwa_v1_assets
+list_rwa_v1_attachments_raw = rwa_store.list_rwa_v1_attachments_raw
+list_rwa_v1_observations_raw = rwa_store.list_rwa_v1_observations_raw
+list_rwa_v1_photos_raw = rwa_store.list_rwa_v1_photos_raw
+list_rwa_v1_visits_raw = rwa_store.list_rwa_v1_visits_raw
+remove_rwa_v1_review_artifact = rwa_store.remove_rwa_v1_review_artifact
+replace_rwa_v1_review_artifact = rwa_store.replace_rwa_v1_review_artifact
+refresh_rwa_v1_capture_session = rwa_store.refresh_rwa_v1_capture_session
+validate_and_issue_rwa_v1_visit = rwa_store.validate_and_issue_rwa_v1_visit
 
 
 ROOT = Path(__file__).resolve().parents[1]
