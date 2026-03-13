@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from urllib.parse import quote_plus
 from datetime import datetime, timezone
 import pandas as pd
 from dataclasses import dataclass
@@ -451,6 +452,7 @@ def _send_real_estate_delivery_email(*, target_email: str, subject: str, body: s
         target_email=target_email,
         subject=subject,
         body=body,
+        html_body=html_body,
     )
     payload = {
         "delivery_status": result.delivery_status,
@@ -523,6 +525,7 @@ def _send_access_notification(
     event_type: str,
     subject: str,
     body: str,
+    html_body: str | None = None,
 ) -> None:
     if not target_email:
         log_auth_notification_event(
@@ -568,6 +571,7 @@ def _send_access_notification(
         target_email=target_email,
         subject=subject,
         body=body,
+        html_body=html_body,
     )
     log_auth_notification_event(
         AUTH_ACCESS_SQLITE_PATH,
@@ -600,6 +604,102 @@ def _ip_locality_label(ip_public: str) -> str:
     label = str(locality.get("locality_label") or "").strip()
     return label or "unknown"
 
+
+
+
+def _auth_app_base_url() -> str:
+    explicit = _secret_value("SANDBOX_PUBLIC_BASE_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    try:
+        headers = dict(getattr(st.context, "headers", {}) or {})
+    except Exception:
+        headers = {}
+    origin = str(headers.get("Origin") or headers.get("origin") or "").strip()
+    if origin:
+        return origin.rstrip("/")
+    host = str(headers.get("Host") or headers.get("host") or "").strip()
+    proto = str(headers.get("X-Forwarded-Proto") or headers.get("x-forwarded-proto") or "https").strip() or "https"
+    if host:
+        return f"{proto}://{host}".rstrip("/")
+    return "https://hrevn-unified-sandbox-cloud-jxjaxxv5kw3zjehm6pgjjj.streamlit.app"
+
+
+def _build_verify_email_link(user_email: str, token: str) -> str:
+    return f"{_auth_app_base_url()}/?verify_email={quote_plus(user_email)}&verify_token={quote_plus(token)}"
+
+
+def _build_welcome_verify_email_text(*, user_email: str, verify_link: str) -> str:
+    return (
+        "Welcome to H-REVN\n\n"
+        "Your account has been successfully created.\n\n"
+        "Verify your email to activate the account:\n"
+        f"{verify_link}\n\n"
+        f"Access the platform: {_auth_app_base_url()}\n\n"
+        "If you did not create this account, please ignore this message.\n\n"
+        "H-REVN Protocol"
+    )
+
+
+def _build_welcome_verify_email_html(*, user_email: str, verify_link: str) -> str:
+    login_link = _auth_app_base_url()
+    return f"""<!doctype html>
+<html>
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Welcome to H-REVN</title></head>
+  <body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#102a43">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f4f6f8;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:600px;background:#ffffff;border-radius:14px;border:1px solid #d9e2ec;overflow:hidden">
+          <tr><td style="padding:28px 24px 8px 24px"><h1 style="margin:0;font-size:28px;line-height:1.2;color:#102a43">Welcome to H-REVN</h1></td></tr>
+          <tr><td style="padding:12px 24px 0 24px;font-size:16px;line-height:1.6;color:#334e68">Your account has been successfully created.</td></tr>
+          <tr><td style="padding:18px 24px 0 24px"><table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f7fafc;border:1px solid #d9e2ec;border-radius:10px"><tr><td style="padding:12px 14px;font-size:14px;line-height:1.6;color:#243b53"><strong>Email:</strong> {user_email}</td></tr></table></td></tr>
+          <tr><td style="padding:22px 24px 6px 24px;text-align:center"><a href="{verify_link}" style="display:inline-block;background:#0b6e4f;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:12px 22px;border-radius:8px">Verify Email</a></td></tr>
+          <tr><td style="padding:8px 24px 0 24px;font-size:13px;line-height:1.6;color:#627d98;text-align:center">After verification, access the platform here: <a href="{login_link}" style="color:#0b6e4f;text-decoration:underline">Access the Platform</a></td></tr>
+          <tr><td style="padding:16px 24px 0 24px;font-size:13px;line-height:1.6;color:#7b8794">If you did not create this account, please ignore this message.</td></tr>
+          <tr><td style="padding:20px 24px 24px 24px;font-size:11px;line-height:1.5;color:#9aa5b1;text-align:center">H-REVN Protocol</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>"""
+
+
+def _issue_or_refresh_verification_token(user_email: str) -> str | None:
+    user_email = (user_email or "").strip().lower()
+    if not user_email:
+        return None
+    now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+    token = str(uuid.uuid4())
+    with sqlite3.connect(AUTH_ACCESS_SQLITE_PATH) as conn:
+        row = conn.execute("SELECT email_verified_flag FROM auth_local_credentials WHERE lower(user_email)=lower(?)", (user_email,)).fetchone()
+        if row is None or int(row[0] or 0) == 1:
+            return None
+        conn.execute("UPDATE auth_local_credentials SET verification_token=?, verification_token_expires_at_utc=?, updated_at_utc=? WHERE lower(user_email)=lower(?)", (token, now_iso, now_iso, user_email))
+    return token
+
+
+def _handle_email_verification_link() -> None:
+    params = st.query_params
+    email_param = str(params.get("verify_email") or "").strip()
+    token_param = str(params.get("verify_token") or "").strip()
+    if not email_param or not token_param:
+        return
+    handled_key = f"verify-link:{email_param}:{token_param}"
+    if st.session_state.get("_handled_verify_link") == handled_key:
+        return
+    context = _get_auth_request_context()
+    verified = verify_email_token(AUTH_ACCESS_SQLITE_PATH, user_email=email_param, token=token_param, context=context)
+    if verified:
+        log_auth_event(AUTH_ACCESS_SQLITE_PATH, user_email=email_param or None, user_role="operator", identifier_attempted=email_param or None, event_type="email_verified", success_flag=True, failure_reason=None, context=context)
+        st.success("Email verified. The account is now active.")
+    else:
+        log_auth_event(AUTH_ACCESS_SQLITE_PATH, user_email=email_param or None, user_role="operator", identifier_attempted=email_param or None, event_type="email_verification_failure", success_flag=False, failure_reason="invalid_verification_link", context=context)
+        st.error("Verification link is invalid or expired.")
+    st.session_state["_handled_verify_link"] = handled_key
+    try:
+        st.query_params.clear()
+    except Exception:
+        pass
 
 def _get_auth_request_context() -> AuthRequestContext:
     headers = {}
@@ -764,6 +864,7 @@ def _render_auth_shell() -> None:
     cfg = _load_auth_shell_config()
     _sync_auth_accounts(cfg)
     _init_auth_state()
+    _handle_email_verification_link()
 
     if st.session_state.get("auth_logged_in"):
         current_email = st.session_state.get("auth_email") or ""
@@ -1141,19 +1242,16 @@ def _render_auth_shell() -> None:
                             failure_reason=None,
                             context=context,
                         )
+                        verify_link = _build_verify_email_link(email_value, verification_token)
                         _send_access_notification(
                             related_user_email=email_value,
                             target_email=email_value,
                             event_type="verification_email_sent",
                             subject="Verify your H-REVN access account",
-                            body=(
-                                "Your H-REVN unified workspace account has been created.\n\n"
-                                f"Verification token: {verification_token}\n\n"
-                                "Use the Verify Email tab to activate the account."
-                            ),
+                            body=_build_welcome_verify_email_text(user_email=email_value, verify_link=verify_link),
+                            html_body=_build_welcome_verify_email_html(user_email=email_value, verify_link=verify_link),
                         )
-                        st.success("Account created. Verification token issued.")
-                        st.code(verification_token, language=None)
+                        st.success("Account created. Check your email to verify the account.")
                     except ValueError:
                         log_auth_event(
                             AUTH_ACCESS_SQLITE_PATH,
@@ -1184,46 +1282,40 @@ def _render_auth_shell() -> None:
         verify_left, verify_right = st.columns([1.1, 0.9])
         with verify_left:
             verify_email = st.text_input(_t("field_email"), key="verify_email")
-            verify_token = st.text_input(_t("field_verification_token"), key="verify_token")
-            if st.button(_t("button_verify_account"), type="primary"):
+            if st.button("Resend verification email", type="primary"):
                 context = _get_auth_request_context()
-                verified = verify_email_token(
-                    AUTH_ACCESS_SQLITE_PATH,
-                    user_email=verify_email,
-                    token=verify_token,
-                    context=context,
-                )
-                if verified:
+                email_value = verify_email.strip().lower()
+                verification_token = _issue_or_refresh_verification_token(email_value)
+                if not verification_token:
+                    st.error("No pending verification account was found for that email.")
+                else:
+                    verify_link = _build_verify_email_link(email_value, verification_token)
+                    _send_access_notification(
+                        related_user_email=email_value,
+                        target_email=email_value,
+                        event_type="verification_email_sent",
+                        subject="Verify your H-REVN access account",
+                        body=_build_welcome_verify_email_text(user_email=email_value, verify_link=verify_link),
+                        html_body=_build_welcome_verify_email_html(user_email=email_value, verify_link=verify_link),
+                    )
                     log_auth_event(
                         AUTH_ACCESS_SQLITE_PATH,
-                        user_email=verify_email.strip().lower() or None,
+                        user_email=email_value or None,
                         user_role="operator",
-                        identifier_attempted=verify_email.strip().lower() or None,
-                        event_type="email_verified",
+                        identifier_attempted=email_value or None,
+                        event_type="verification_email_resent",
                         success_flag=True,
                         failure_reason=None,
                         context=context,
                     )
-                    st.success("Email verified. The account is now active.")
-                else:
-                    log_auth_event(
-                        AUTH_ACCESS_SQLITE_PATH,
-                        user_email=verify_email.strip().lower() or None,
-                        user_role="operator",
-                        identifier_attempted=verify_email.strip().lower() or None,
-                        event_type="email_verification_failure",
-                        success_flag=False,
-                        failure_reason="invalid_verification_token",
-                        context=context,
-                    )
-                    st.error("Verification failed. Check the email and token.")
+                    st.success("Verification email sent again.")
         with verify_right:
             st.markdown("#### Verification flow")
             st.dataframe(
                 [
                     {"Step": "1", "Action": "Create account"},
-                    {"Step": "2", "Action": "Receive token by email"},
-                    {"Step": "3", "Action": "Paste token in Verify Email"},
+                    {"Step": "2", "Action": "Receive verification email"},
+                    {"Step": "3", "Action": "Click the Verify Email button"},
                     {"Step": "4", "Action": "Account becomes active"},
                 ],
                 use_container_width=True,

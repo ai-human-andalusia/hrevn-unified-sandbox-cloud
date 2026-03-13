@@ -24,12 +24,15 @@ def send_smtp_notification(
     target_email: str,
     subject: str,
     body: str,
+    html_body: str | None = None,
 ) -> AuthNotificationResult:
     message = EmailMessage()
     message["From"] = mail_from
     message["To"] = target_email
     message["Subject"] = subject
     message.set_content(body)
+    if html_body:
+        message.add_alternative(html_body, subtype="html")
 
     try:
         with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
