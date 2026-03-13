@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from datetime import datetime, timezone
 import pandas as pd
 from dataclasses import dataclass
 from pathlib import Path
@@ -3541,7 +3542,7 @@ def render_email_panel() -> None:
             should_auto_sync = True
         else:
             last_dt = _parse_iso_datetime(str(latest_sync.get("created_at_utc") or ""))
-            should_auto_sync = not last_dt or (_utc_now() - last_dt).total_seconds() >= 1800
+            should_auto_sync = not last_dt or (_utc_now_datetime() - last_dt).total_seconds() >= 1800
     if should_auto_sync:
         try:
             sync_result = sync_gmail_inbox(
