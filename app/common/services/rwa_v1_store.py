@@ -287,7 +287,7 @@ def refresh_rwa_v1_capture_session(visit_id: str, *, timeout_minutes: int = _CAP
         return dict(row) if row else None
 
 
-def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: str, lpi_code: str, severity_0_5: int, observation_description: str, coordinator_notes: str, uploaded_files: list, upload_mode: str = 'direct_capture', db_path: Path | None = None) -> str:
+def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: str, lpi_code: str, severity_0_5: int, observation_description: str, coordinator_notes: str, file_entries: list[dict], db_path: Path | None = None) -> str:
     target = ensure_rwa_capture_schema(db_path)
     now_dt = _now_dt()
     now = _iso(now_dt)
@@ -296,8 +296,20 @@ def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: s
         if not visit_row:
             raise ValueError(f"Visit not found: {visit_id}")
         visit = dict(visit_row)
-        if upload_mode == 'direct_capture' and str(visit.get('direct_capture_session_status') or 'open') != 'open':
-            upload_mode = 'manual_upload'
+        normalized_entries = []
+        for entry in file_entries:
+            ingest_mode = str(entry.get('ingest_mode') or 'manual_upload')
+            if ingest_mode == 'direct_capture' and str(visit.get('direct_capture_session_status') or 'open') != 'open':
+                ingest_mode = 'manual_upload'
+            normalized_entries.append({
+                'filename': str(entry.get('filename') or ''),
+                'payload': entry.get('payload') or b'',
+                'mime': str(entry.get('mime') or ''),
+                'ingest_mode': ingest_mode,
+                'captured_at_utc': entry.get('captured_at_utc') or (now if ingest_mode == 'direct_capture' else None),
+            })
+        has_direct_capture = any(item['ingest_mode'] == 'direct_capture' for item in normalized_entries)
+        has_manual_uploads = any(item['ingest_mode'] == 'manual_upload' for item in normalized_entries)
         conn.execute(
             """
             INSERT INTO rwa_observations (
@@ -312,13 +324,13 @@ def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: s
                 lpi_code,
                 int(severity_0_5),
                 observation_description.strip(),
-                json.dumps({"coordinator_notes": coordinator_notes.strip(), "upload_mode": upload_mode}),
+                json.dumps({"coordinator_notes": coordinator_notes.strip(), "has_direct_capture": has_direct_capture, "has_manual_uploads": has_manual_uploads}),
                 now,
                 now,
             ),
         )
-        for uploaded in uploaded_files:
-            payload = uploaded.getvalue()
+        for item in normalized_entries:
+            payload = item['payload']
             conn.execute(
                 """
                 INSERT INTO rwa_photos (
@@ -331,15 +343,15 @@ def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: s
                     visit_id,
                     asset_id,
                     observation_id,
-                    uploaded.name,
+                    item['filename'],
                     _sha256_bytes(payload),
-                    upload_mode,
-                    now if upload_mode == 'direct_capture' else None,
+                    item['ingest_mode'],
+                    item['captured_at_utc'],
                     now,
-                    json.dumps({"size_bytes": len(payload), "mime": getattr(uploaded, 'type', ''), "upload_mode": upload_mode}),
+                    json.dumps({"size_bytes": len(payload), "mime": item['mime'], "upload_mode": item['ingest_mode']}),
                 ),
             )
-        if upload_mode == 'direct_capture' and uploaded_files:
+        if has_direct_capture:
             started, ended, _count = _visit_photo_metrics(conn, visit_id, 'direct_capture')
             started_iso = _iso(started) if started else now
             last_iso = _iso(ended) if ended else now
@@ -356,7 +368,7 @@ def create_rwa_v1_observation(*, observation_id: str, visit_id: str, asset_id: s
                 """,
                 (started_iso, last_iso, window_minutes, now, visit_id),
             )
-        elif upload_mode == 'manual_upload' and uploaded_files:
+        if has_manual_uploads:
             conn.execute(
                 """
                 UPDATE rwa_visits

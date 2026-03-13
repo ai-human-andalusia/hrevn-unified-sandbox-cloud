@@ -2271,6 +2271,12 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
         st.session_state[visit_draft_key] = ""
     if observation_draft_key not in st.session_state:
         st.session_state[observation_draft_key] = ""
+    if capture_enabled_key not in st.session_state:
+        st.session_state[capture_enabled_key] = False
+    if staged_captures_key not in st.session_state:
+        st.session_state[staged_captures_key] = []
+    if camera_nonce_key not in st.session_state:
+        st.session_state[camera_nonce_key] = 0
 
     asset_options = {"Select asset": ""}
     asset_options.update(
@@ -2310,6 +2316,9 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
             st.session_state[visit_draft_key] = ""
             st.session_state[observation_draft_key] = ""
             st.session_state[asset_selectbox_key] = asset_labels[0]
+            st.session_state[capture_enabled_key] = False
+            st.session_state[staged_captures_key] = []
+            st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
             st.rerun()
         if action_right.button("Nueva observación", key=f"{key_prefix}_new_observation", use_container_width=True):
             st.session_state[mode_key] = "new_observation"
@@ -2317,6 +2326,9 @@ def _render_legacy_panel_a(context: dict, *, key_prefix: str = "legacy_a") -> No
             if asset_id_for_observation and not st.session_state.get(visit_draft_key):
                 st.session_state[visit_draft_key] = _build_visit_draft_id(asset_id_for_observation)
             st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state.get(visit_draft_key, ""))
+            st.session_state[capture_enabled_key] = True
+            st.session_state[staged_captures_key] = []
+            st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
             st.rerun()
 
         field_a, field_b = st.columns(2)
@@ -2440,6 +2452,9 @@ def _render_rwa_placeholder() -> None:
     asset_selectbox_key = "rwa_asset_selectbox"
     visit_draft_key = "rwa_visit_draft_id"
     observation_draft_key = "rwa_observation_draft_id"
+    capture_enabled_key = "rwa_capture_enabled"
+    staged_captures_key = "rwa_staged_captures"
+    camera_nonce_key = "rwa_camera_nonce"
 
     if mode_key not in st.session_state:
         st.session_state[mode_key] = "new_visit"
@@ -2449,6 +2464,12 @@ def _render_rwa_placeholder() -> None:
         st.session_state[visit_draft_key] = ""
     if observation_draft_key not in st.session_state:
         st.session_state[observation_draft_key] = ""
+    if capture_enabled_key not in st.session_state:
+        st.session_state[capture_enabled_key] = False
+    if staged_captures_key not in st.session_state:
+        st.session_state[staged_captures_key] = []
+    if camera_nonce_key not in st.session_state:
+        st.session_state[camera_nonce_key] = 0
 
     all_assets = list_rwa_v1_assets()
     all_visits = list_rwa_v1_visits_raw()
@@ -2515,6 +2536,9 @@ def _render_rwa_placeholder() -> None:
             if chosen_asset_id != previous_asset_id:
                 st.session_state[visit_draft_key] = _build_visit_draft_id(chosen_asset_id)
                 st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state[visit_draft_key])
+                st.session_state[capture_enabled_key] = False
+                st.session_state[staged_captures_key] = []
+                st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
 
         current_asset_id = st.session_state.get(asset_key, "")
         current_asset_row = next((item for item in all_assets if str(item.get('asset_id') or '') == current_asset_id), None)
@@ -2571,10 +2595,36 @@ def _render_rwa_placeholder() -> None:
             st.metric('Direct capture', direct_capture_count)
         with metric_right_b:
             st.metric('Manual upload', manual_upload_count)
+        capture_action_left, capture_action_right = st.columns(2)
+        if capture_action_left.button("Iniciar captura", key="rwa_start_capture", use_container_width=True):
+            st.session_state[capture_enabled_key] = True
+            st.rerun()
+        if capture_action_right.button("Finalizar captura", key="rwa_finish_capture", use_container_width=True):
+            st.session_state[capture_enabled_key] = False
+            st.rerun()
         if capture_status == 'open':
             st.info(f'Direct capture session open. It will close automatically after 10 minutes without a new capture. Current capture window: {capture_window_minutes} min.')
         else:
             st.warning('Direct capture session closed. New files will be registered as manual uploads. This will not block issuance, but it must be reflected in the final output.')
+        if st.session_state.get(capture_enabled_key, False):
+            camera_capture = st.camera_input("Capturar foto", key=f"rwa_camera_capture::{st.session_state.get(camera_nonce_key, 0)}")
+            if camera_capture is not None:
+                staged_captures = list(st.session_state.get(staged_captures_key, []))
+                filename = str(camera_capture.name or f"capture_{len(staged_captures)+1}.jpg").strip()
+                normalized_filename = filename.lower()
+                staged_names = {str(item.get('filename') or '').lower() for item in staged_captures}
+                if normalized_filename in existing_photo_names or normalized_filename in staged_names:
+                    st.error(f"Duplicate photo name detected for camera capture: {filename}")
+                else:
+                    staged_captures.append({
+                        'filename': filename,
+                        'payload': camera_capture.getvalue(),
+                        'mime': getattr(camera_capture, 'type', ''),
+                        'ingest_mode': 'direct_capture' if capture_status == 'open' else 'manual_upload',
+                    })
+                    st.session_state[staged_captures_key] = staged_captures
+                    st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
+                    st.rerun()
         uploaded_files = st.file_uploader(
             "Upload photos",
             type=["jpg", "jpeg", "png", "heic", "heif", "webp", "bmp", "tif", "tiff"],
@@ -2584,16 +2634,21 @@ def _render_rwa_placeholder() -> None:
             help=("Files are treated as direct capture while the session is open, and as manual upload after the session closes."),
         )
         uploaded_files = uploaded_files or []
+        staged_captures = list(st.session_state.get(staged_captures_key, []))
         uploaded_names = [str(item.name or '').strip() for item in uploaded_files]
-        normalized_names = [name.lower() for name in uploaded_names if name]
+        staged_names = [str(item.get('filename') or '').strip() for item in staged_captures]
+        all_candidate_names = [name for name in uploaded_names + staged_names if name]
+        normalized_names = [name.lower() for name in all_candidate_names]
         duplicate_inside_upload = sorted({name for name in normalized_names if normalized_names.count(name) > 1})
         duplicate_against_existing = sorted({name for name in normalized_names if name in existing_photo_names})
         has_duplicate_names = bool(duplicate_inside_upload or duplicate_against_existing)
-        uploaded_count = len(uploaded_files)
+        uploaded_count = len(uploaded_files) + len(staged_captures)
+        if staged_captures:
+            st.caption(f"Camera captures staged: {len(staged_captures)}")
         if has_duplicate_names:
             duplicate_messages = []
             if duplicate_inside_upload:
-                duplicate_messages.append("duplicated in current upload: " + ", ".join(duplicate_inside_upload))
+                duplicate_messages.append("duplicated in current selection: " + ", ".join(duplicate_inside_upload))
             if duplicate_against_existing:
                 duplicate_messages.append("already registered in visit: " + ", ".join(duplicate_against_existing))
             st.error("Duplicate photo name detected: " + " | ".join(duplicate_messages))
@@ -2614,6 +2669,21 @@ def _render_rwa_placeholder() -> None:
             elif uploaded_count < min_photos:
                 st.warning(f"You must upload at least {min_photos} photo(s) before saving this observation.")
             else:
+                file_entries = []
+                for staged in staged_captures:
+                    file_entries.append({
+                        'filename': staged['filename'],
+                        'payload': staged['payload'],
+                        'mime': staged.get('mime', ''),
+                        'ingest_mode': staged.get('ingest_mode', 'direct_capture'),
+                    })
+                for uploaded in uploaded_files:
+                    file_entries.append({
+                        'filename': str(uploaded.name or '').strip(),
+                        'payload': uploaded.getvalue(),
+                        'mime': getattr(uploaded, 'type', ''),
+                        'ingest_mode': upload_mode,
+                    })
                 create_rwa_v1_visit(
                     asset_id=current_asset_id,
                     visit_id=display_visit_id,
@@ -2627,11 +2697,12 @@ def _render_rwa_placeholder() -> None:
                     severity_0_5=int(severity),
                     observation_description=observation_description,
                     coordinator_notes=coordinator_notes,
-                    uploaded_files=uploaded_files,
-                    upload_mode=upload_mode,
+                    file_entries=file_entries,
                 )
                 st.success(f"Observation saved: {observation_display}")
                 st.session_state[observation_draft_key] = _build_observation_draft_id(display_visit_id)
+                st.session_state[staged_captures_key] = []
+                st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
                 st.rerun()
 
     if current_visit_photos:
