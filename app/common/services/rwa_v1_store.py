@@ -201,6 +201,20 @@ def list_rwa_v1_photos_raw(db_path: Path | None = None) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def list_rwa_v1_attachments_raw(db_path: Path | None = None) -> list[dict]:
+    target = ensure_rwa_capture_schema(db_path)
+    with _connect(target) as conn:
+        rows = conn.execute(
+            """
+            SELECT attachment_id, visit_id, asset_id, observation_id, attachment_filename, attachment_hash_sha256,
+                   attachment_kind, attachment_status, added_to_record_at_utc, attachment_data_json
+            FROM rwa_attachments
+            ORDER BY added_to_record_at_utc DESC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def create_rwa_v1_visit(*, asset_id: str, visit_id: str, visit_date_utc: str | None = None, visit_data: dict | None = None, db_path: Path | None = None) -> str:
     target = ensure_rwa_capture_schema(db_path)
     now = _now_utc()
@@ -416,7 +430,7 @@ def finalize_rwa_v1_capture_session(visit_id: str, *, db_path: Path | None = Non
         return dict(updated) if updated else None
 
 
-def attach_rwa_v1_files_to_visit(*, visit_id: str, uploaded_files: list, db_path: Path | None = None) -> int:
+def attach_rwa_v1_files_to_visit(*, visit_id: str, uploaded_files: list, pre_issue_comments: str = "", db_path: Path | None = None) -> int:
     target = ensure_rwa_capture_schema(db_path)
     if not uploaded_files:
         return 0
@@ -492,22 +506,63 @@ def attach_rwa_v1_files_to_visit(*, visit_id: str, uploaded_files: list, db_path
                     ),
                 )
             inserted += 1
-        if inserted:
-            conn.execute(
-                """
-                UPDATE rwa_visits
-                SET updated_at_utc = ?,
-                    visit_status = CASE
-                      WHEN visit_status IN ('issued', 'closed') THEN visit_status
-                      ELSE 'pending_validation'
-                    END,
-                    visit_data_json = json_patch(COALESCE(visit_data_json, '{}'), json(?))
-                WHERE visit_id = ?
-                """,
-                (now, json.dumps({"has_manual_additions": True}), visit_id),
-            )
+        patch_payload = {
+            "pre_issue_comments": pre_issue_comments.strip(),
+            "has_manual_additions": bool(inserted),
+            "review_last_saved_at_utc": now,
+        }
+        conn.execute(
+            """
+            UPDATE rwa_visits
+            SET updated_at_utc = ?,
+                visit_status = CASE
+                  WHEN visit_status IN ('issued', 'closed') THEN visit_status
+                  ELSE 'pending_validation'
+                END,
+                visit_data_json = json_patch(COALESCE(visit_data_json, '{}'), json(?))
+            WHERE visit_id = ?
+            """,
+            (now, json.dumps(patch_payload), visit_id),
+        )
         conn.commit()
     return inserted
+
+
+def remove_rwa_v1_review_artifact(*, visit_id: str, artifact_kind: str, artifact_id: str, db_path: Path | None = None) -> bool:
+    target = ensure_rwa_capture_schema(db_path)
+    now = _now_utc()
+    with _connect(target) as conn:
+        visit_row = conn.execute("SELECT issuance_status FROM rwa_visits WHERE visit_id = ?", (visit_id,)).fetchone()
+        if not visit_row:
+            return False
+        if str(visit_row[0] or "") == "issued":
+            return False
+        deleted = 0
+        if artifact_kind == "photo":
+            row = conn.execute(
+                """
+                SELECT ingest_mode FROM rwa_photos
+                WHERE photo_id = ? AND visit_id = ?
+                """,
+                (artifact_id, visit_id),
+            ).fetchone()
+            if row and str(row[0] or "") == "manual_upload":
+                deleted = conn.execute(
+                    "DELETE FROM rwa_photos WHERE photo_id = ? AND visit_id = ?",
+                    (artifact_id, visit_id),
+                ).rowcount
+        elif artifact_kind == "attachment":
+            deleted = conn.execute(
+                "DELETE FROM rwa_attachments WHERE attachment_id = ? AND visit_id = ?",
+                (artifact_id, visit_id),
+            ).rowcount
+        if deleted:
+            conn.execute(
+                "UPDATE rwa_visits SET updated_at_utc = ? WHERE visit_id = ?",
+                (now, visit_id),
+            )
+            conn.commit()
+        return bool(deleted)
 
 
 def validate_and_issue_rwa_v1_visit(*, visit_id: str, pre_issue_comments: str = "", db_path: Path | None = None) -> dict | None:

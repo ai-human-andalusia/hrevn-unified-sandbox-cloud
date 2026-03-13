@@ -74,9 +74,11 @@ from common.services.rwa_v1_store import (
     ensure_rwa_v1_demo_seed,
     finalize_rwa_v1_capture_session,
     list_rwa_v1_assets,
+    list_rwa_v1_attachments_raw,
     list_rwa_v1_observations_raw,
     list_rwa_v1_photos_raw,
     list_rwa_v1_visits_raw,
+    remove_rwa_v1_review_artifact,
     refresh_rwa_v1_capture_session,
     validate_and_issue_rwa_v1_visit,
 )
@@ -2479,6 +2481,7 @@ def _render_rwa_placeholder() -> None:
     all_visits = list_rwa_v1_visits_raw()
     all_observations = list_rwa_v1_observations_raw()
     all_photos = list_rwa_v1_photos_raw()
+    all_attachments = list_rwa_v1_attachments_raw()
 
     rwa_tab_capture, rwa_tab_review = st.tabs(["Capture", "Review / Validate / Sign"])
 
@@ -2754,12 +2757,29 @@ def _render_rwa_placeholder() -> None:
             selected_visit_id = str(selected_rows.iloc[0].get('VISIT ID') or '')
             selected_visit = next((item for item in all_visits if str(item.get('visit_id') or '') == selected_visit_id), None)
             selected_asset = next((item for item in all_assets if str(item.get('asset_id') or '') == str((selected_visit or {}).get('asset_id') or '')), None)
+            visit_data = {}
+            try:
+                visit_data = json.loads(str((selected_visit or {}).get('visit_data_json') or '{}'))
+            except Exception:
+                visit_data = {}
+            selected_visit_observations = [
+                item for item in all_observations if str(item.get('visit_id') or '') == selected_visit_id
+            ]
+            selected_visit_photos = [
+                item for item in all_photos if str(item.get('visit_id') or '') == selected_visit_id
+            ]
+            selected_visit_attachments = [
+                item for item in all_attachments if str(item.get('visit_id') or '') == selected_visit_id
+            ]
             st.markdown('### Pending review details')
             c1, c2, c3 = st.columns(3)
             c1.metric('Visit', selected_visit_id)
             c2.metric('Capture status', str((selected_visit or {}).get('direct_capture_session_status') or ''))
             c3.metric('Issuance status', str((selected_visit or {}).get('issuance_status') or ''))
             st.text_input('Asset', value=str((selected_asset or {}).get('asset_name') or ''), disabled=True, key='rwa_review_asset_name')
+            if st.session_state.get('rwa_review_current_visit') != selected_visit_id:
+                st.session_state['rwa_review_current_visit'] = selected_visit_id
+                st.session_state['rwa_pre_issue_comments'] = str(visit_data.get('pre_issue_comments') or '')
             st.text_area('Comentarios antes de la emisión', key='rwa_pre_issue_comments', height=120)
             review_uploads = st.file_uploader(
                 'Añadir fotos o documentación adicional',
@@ -2768,14 +2788,79 @@ def _render_rwa_placeholder() -> None:
                 key='rwa_review_uploader',
             ) or []
             review_left, review_right = st.columns(2)
-            if review_left.button('Guardar anexos', key='rwa_review_attach', use_container_width=True):
-                inserted = attach_rwa_v1_files_to_visit(visit_id=selected_visit_id, uploaded_files=review_uploads)
-                st.success(f'Attached files: {inserted}')
+            if review_left.button('Guardar comentarios y anexos', key='rwa_review_attach', use_container_width=True):
+                inserted = attach_rwa_v1_files_to_visit(
+                    visit_id=selected_visit_id,
+                    uploaded_files=review_uploads,
+                    pre_issue_comments=str(st.session_state.get('rwa_pre_issue_comments') or ''),
+                )
+                st.success(f'Comentarios guardados y anexos añadidos: {inserted}')
                 st.rerun()
             if review_right.button('Validar y firmar', key='rwa_review_issue', type='primary', use_container_width=True):
                 validate_and_issue_rwa_v1_visit(visit_id=selected_visit_id, pre_issue_comments=str(st.session_state.get('rwa_pre_issue_comments') or ''))
                 st.success(f'Visit validated and issued: {selected_visit_id}')
                 st.rerun()
+            summary_rows = []
+            for observation in selected_visit_observations:
+                observation_id = str(observation.get('observation_id') or '')
+                observation_photos = [
+                    item for item in selected_visit_photos if str(item.get('observation_id') or '') == observation_id
+                ]
+                added_manual_photos = [
+                    item for item in observation_photos if str(item.get('ingest_mode') or '') == 'manual_upload'
+                ]
+                summary_rows.append({
+                    'OBSERVATION': observation_id,
+                    'LPI': str(observation.get('lpi_code') or ''),
+                    'SEVERITY': int(observation.get('severity_0_5') or 0),
+                    'CAPTURE PHOTOS': len([item for item in observation_photos if str(item.get('ingest_mode') or '') == 'direct_capture']),
+                    'MANUAL PHOTOS': len(added_manual_photos),
+                    'DESCRIPTION': str(observation.get('observation_description') or ''),
+                })
+            if summary_rows:
+                st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+            review_artifact_rows = []
+            for photo in selected_visit_photos:
+                if str(photo.get('ingest_mode') or '') == 'manual_upload':
+                    review_artifact_rows.append({
+                        'REMOVE': False,
+                        'TYPE': 'photo',
+                        'ID': str(photo.get('photo_id') or ''),
+                        'FILENAME': str(photo.get('photo_filename') or ''),
+                        'ADDED AT': str(photo.get('added_to_record_at_utc') or ''),
+                    })
+            for attachment in selected_visit_attachments:
+                review_artifact_rows.append({
+                    'REMOVE': False,
+                    'TYPE': 'attachment',
+                    'ID': str(attachment.get('attachment_id') or ''),
+                    'FILENAME': str(attachment.get('attachment_filename') or ''),
+                    'ADDED AT': str(attachment.get('added_to_record_at_utc') or ''),
+                })
+            st.markdown('#### Anexos y archivos añadidos en revisión')
+            if review_artifact_rows:
+                artifact_editor = st.data_editor(
+                    pd.DataFrame(review_artifact_rows),
+                    use_container_width=True,
+                    hide_index=True,
+                    key='rwa_review_artifacts_editor',
+                    column_config={'REMOVE': st.column_config.CheckboxColumn('REMOVE')},
+                    disabled=['TYPE', 'ID', 'FILENAME', 'ADDED AT'],
+                )
+                removable_rows = artifact_editor[artifact_editor['REMOVE'] == True] if isinstance(artifact_editor, pd.DataFrame) else pd.DataFrame()
+                if st.button('Eliminar seleccionados', key='rwa_review_remove_artifacts'):
+                    removed = 0
+                    for _, row in removable_rows.iterrows():
+                        if remove_rwa_v1_review_artifact(
+                            visit_id=selected_visit_id,
+                            artifact_kind=str(row.get('TYPE') or ''),
+                            artifact_id=str(row.get('ID') or ''),
+                        ):
+                            removed += 1
+                    st.success(f'Elementos eliminados: {removed}')
+                    st.rerun()
+            else:
+                st.info('No hay anexos ni archivos manuales añadidos en revisión.')
         elif len(selected_rows) > 1:
             st.info('Select exactly one visit to review and issue.')
         else:
@@ -4142,4 +4227,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
