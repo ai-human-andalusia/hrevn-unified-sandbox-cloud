@@ -68,14 +68,17 @@ from common.services.real_estate_ai_review import review_real_estate_certificati
 from common.services.rwa_v1_schema import ensure_rwa_v1_schema
 from common.services.rwa_v1_store import (
     RWA_ASSET_CATEGORIES,
+    attach_rwa_v1_files_to_visit,
     create_rwa_v1_observation,
     create_rwa_v1_visit,
     ensure_rwa_v1_demo_seed,
+    finalize_rwa_v1_capture_session,
     list_rwa_v1_assets,
     list_rwa_v1_observations_raw,
     list_rwa_v1_photos_raw,
     list_rwa_v1_visits_raw,
     refresh_rwa_v1_capture_session,
+    validate_and_issue_rwa_v1_visit,
 )
 
 from common.services.real_estate_v2_store import (
@@ -2477,6 +2480,8 @@ def _render_rwa_placeholder() -> None:
     all_observations = list_rwa_v1_observations_raw()
     all_photos = list_rwa_v1_photos_raw()
 
+    rwa_tab_capture, rwa_tab_review = st.tabs(["Capture", "Review / Validate / Sign"])
+
     asset_options = {"Select asset": ""}
     asset_options.update(
         {
@@ -2496,220 +2501,285 @@ def _render_rwa_placeholder() -> None:
         next_observation_number = len(visit_observations) + 1 if visit_id else 0
         return f"RWA-OBS-{visit_id}-{next_observation_number:03d}" if visit_id else ""
 
-    current_asset_id = st.session_state.get(asset_key, "")
-    current_asset_label = next((label for label, value in asset_options.items() if value == current_asset_id), asset_labels[0])
+    with rwa_tab_capture:
+        current_asset_id = st.session_state.get(asset_key, "")
+        current_asset_label = next((label for label, value in asset_options.items() if value == current_asset_id), asset_labels[0])
 
-    current_visit_id_for_refresh = st.session_state.get(visit_draft_key, "")
-    if current_visit_id_for_refresh:
-        refreshed_visit = refresh_rwa_v1_capture_session(current_visit_id_for_refresh)
-        if refreshed_visit:
-            all_visits = list_rwa_v1_visits_raw()
+        current_visit_id_for_refresh = st.session_state.get(visit_draft_key, "")
+        if current_visit_id_for_refresh:
+            refreshed_visit = refresh_rwa_v1_capture_session(current_visit_id_for_refresh)
+            if refreshed_visit:
+                all_visits = list_rwa_v1_visits_raw()
+                all_photos = list_rwa_v1_photos_raw()
 
-    left, right = st.columns(2)
-    with left:
-        action_left, action_right = st.columns(2)
-        if action_left.button("Nueva visita", key="rwa_new_visit", use_container_width=True):
-            st.session_state[mode_key] = "new_visit"
-            st.session_state[asset_key] = ""
-            st.session_state[visit_draft_key] = ""
-            st.session_state[observation_draft_key] = ""
-            st.session_state[asset_selectbox_key] = asset_labels[0]
-            st.rerun()
-        if action_right.button("Nueva observación", key="rwa_new_observation", use_container_width=True):
-            st.session_state[mode_key] = "new_observation"
-            asset_id_for_observation = st.session_state.get(asset_key, "")
-            if asset_id_for_observation and not st.session_state.get(visit_draft_key):
-                st.session_state[visit_draft_key] = _build_visit_draft_id(asset_id_for_observation)
-            st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state.get(visit_draft_key, ""))
-            st.rerun()
-
-        field_a, field_b = st.columns(2)
-        with field_a:
-            chosen_asset_label = st.selectbox(
-                "Asset",
-                asset_labels,
-                index=asset_labels.index(current_asset_label) if current_asset_label in asset_labels else 0,
-                key=asset_selectbox_key,
-            )
-            chosen_asset_id = asset_options[chosen_asset_label]
-            previous_asset_id = st.session_state.get(asset_key, "")
-            st.session_state[asset_key] = chosen_asset_id
-            if chosen_asset_id != previous_asset_id:
-                st.session_state[visit_draft_key] = _build_visit_draft_id(chosen_asset_id)
-                st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state[visit_draft_key])
+        left, right = st.columns(2)
+        with left:
+            action_left, action_right = st.columns(2)
+            if action_left.button("Nueva visita", key="rwa_new_visit", use_container_width=True):
+                st.session_state[mode_key] = "new_visit"
+                st.session_state[asset_key] = ""
+                st.session_state[visit_draft_key] = ""
+                st.session_state[observation_draft_key] = ""
+                st.session_state[asset_selectbox_key] = asset_labels[0]
                 st.session_state[capture_enabled_key] = False
                 st.session_state[staged_captures_key] = []
                 st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
-
-        current_asset_id = st.session_state.get(asset_key, "")
-        current_asset_row = next((item for item in all_assets if str(item.get('asset_id') or '') == current_asset_id), None)
-        display_visit_id = st.session_state.get(visit_draft_key, "")
-        with field_b:
-            st.text_input("Número de visita", value=display_visit_id, disabled=True)
-
-        observation_display = st.session_state.get(observation_draft_key, "")
-        st.text_input("Número de observación", value=observation_display, disabled=True)
-
-        current_asset_category = str(current_asset_row.get('asset_type') or '') if current_asset_row else ''
-        asset_lpi_options = _resolve_rwa_lpi_options_for_category(current_asset_category)
-        selected_lpi = st.selectbox(
-            "LPI code (official)",
-            options=asset_lpi_options,
-            index=0,
-            disabled=not bool(current_asset_row),
-            key="rwa_lpi",
-        )
-        severity = st.selectbox(
-            "Severity (0-5)",
-            options=[0, 1, 2, 3, 4, 5],
-            index=0,
-            key="rwa_severity",
-        )
-        min_photos = 3 if int(severity) >= 3 else 1
-        observation_description = st.text_area(
-            "Description",
-            value="",
-            height=140,
-            key="rwa_description",
-        )
-        coordinator_notes = st.text_area(
-            "Coordinator notes",
-            value="",
-            height=120,
-            key="rwa_notes",
-        )
-
-    current_visit_photos = [item for item in all_photos if str(item.get('visit_id') or '') == display_visit_id]
-    existing_photo_names = {str(item.get('photo_filename') or '').strip().lower() for item in current_visit_photos}
-    current_visit_row = next((item for item in all_visits if str(item.get('visit_id') or '') == display_visit_id), None)
-    capture_status = str((current_visit_row or {}).get('direct_capture_session_status') or 'open')
-    capture_window_minutes = int((current_visit_row or {}).get('direct_capture_window_minutes') or 0)
-    direct_capture_count = len([item for item in current_visit_photos if str(item.get('ingest_mode') or '') == 'direct_capture'])
-    manual_upload_count = len([item for item in current_visit_photos if str(item.get('ingest_mode') or '') == 'manual_upload'])
-    upload_mode = 'direct_capture' if capture_status == 'open' else 'manual_upload'
-
-    with right:
-        metric_left, metric_right, metric_right_b = st.columns([0.45, 0.275, 0.275])
-        with metric_left:
-            st.markdown("<div style='display:flex;align-items:center;gap:12px;margin-top:4px;margin-bottom:10px;'><div style='font-family:Menlo,Monaco,monospace;font-size:13px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.06em;'>Registered photos</div><div style='font-family:Menlo,Monaco,monospace;font-size:22px;font-weight:800;color:#0f172a;'>" + str(len(current_visit_photos)) + "</div></div>", unsafe_allow_html=True)
-        with metric_right:
-            st.metric('Direct capture', direct_capture_count)
-        with metric_right_b:
-            st.metric('Manual upload', manual_upload_count)
-        capture_action_left, capture_action_right = st.columns(2)
-        if capture_action_left.button("Iniciar captura", key="rwa_start_capture", use_container_width=True):
-            st.session_state[capture_enabled_key] = True
-            st.rerun()
-        if capture_action_right.button("Finalizar captura", key="rwa_finish_capture", use_container_width=True):
-            st.session_state[capture_enabled_key] = False
-            st.rerun()
-        if capture_status == 'open':
-            st.info(f'Direct capture session open. It will close automatically after 10 minutes without a new capture. Current capture window: {capture_window_minutes} min.')
-        else:
-            st.warning('Direct capture session closed. New files will be registered as manual uploads. This will not block issuance, but it must be reflected in the final output.')
-        if st.session_state.get(capture_enabled_key, False):
-            camera_capture = st.camera_input("Capturar foto", key=f"rwa_camera_capture::{st.session_state.get(camera_nonce_key, 0)}")
-            if camera_capture is not None:
-                staged_captures = list(st.session_state.get(staged_captures_key, []))
-                filename = str(camera_capture.name or f"capture_{len(staged_captures)+1}.jpg").strip()
-                normalized_filename = filename.lower()
-                staged_names = {str(item.get('filename') or '').lower() for item in staged_captures}
-                if normalized_filename in existing_photo_names or normalized_filename in staged_names:
-                    st.error(f"Duplicate photo name detected for camera capture: {filename}")
-                else:
-                    staged_captures.append({
-                        'filename': filename,
-                        'payload': camera_capture.getvalue(),
-                        'mime': getattr(camera_capture, 'type', ''),
-                        'ingest_mode': 'direct_capture' if capture_status == 'open' else 'manual_upload',
-                    })
-                    st.session_state[staged_captures_key] = staged_captures
-                    st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
-                    st.rerun()
-        uploaded_files = st.file_uploader(
-            "Upload photos",
-            type=["jpg", "jpeg", "png", "heic", "heif", "webp", "bmp", "tif", "tiff"],
-            accept_multiple_files=True,
-            key="rwa_uploader",
-            label_visibility="collapsed",
-            help=("Files are treated as direct capture while the session is open, and as manual upload after the session closes."),
-        )
-        uploaded_files = uploaded_files or []
-        staged_captures = list(st.session_state.get(staged_captures_key, []))
-        uploaded_names = [str(item.name or '').strip() for item in uploaded_files]
-        staged_names = [str(item.get('filename') or '').strip() for item in staged_captures]
-        all_candidate_names = [name for name in uploaded_names + staged_names if name]
-        normalized_names = [name.lower() for name in all_candidate_names]
-        duplicate_inside_upload = sorted({name for name in normalized_names if normalized_names.count(name) > 1})
-        duplicate_against_existing = sorted({name for name in normalized_names if name in existing_photo_names})
-        has_duplicate_names = bool(duplicate_inside_upload or duplicate_against_existing)
-        uploaded_count = len(uploaded_files) + len(staged_captures)
-        if staged_captures:
-            st.caption(f"Camera captures staged: {len(staged_captures)}")
-        if has_duplicate_names:
-            duplicate_messages = []
-            if duplicate_inside_upload:
-                duplicate_messages.append("duplicated in current selection: " + ", ".join(duplicate_inside_upload))
-            if duplicate_against_existing:
-                duplicate_messages.append("already registered in visit: " + ", ".join(duplicate_against_existing))
-            st.error("Duplicate photo name detected: " + " | ".join(duplicate_messages))
-        elif uploaded_count >= min_photos:
-            st.success(f"Photos: {uploaded_count}/{min_photos}")
-        else:
-            st.error(f"Photos: {uploaded_count}/{min_photos} (minimum required)")
-
-        if st.button("Guardar observación", type="primary", key="rwa_save_observation", use_container_width=True):
-            if not current_asset_id:
-                st.warning("Select an asset first.")
-            elif not display_visit_id:
-                st.warning("The visit id could not be generated yet.")
-            elif not observation_display:
-                st.warning("The observation id could not be generated yet.")
-            elif has_duplicate_names:
-                st.warning("Duplicate photo names must be resolved before saving the observation.")
-            elif uploaded_count < min_photos:
-                st.warning(f"You must upload at least {min_photos} photo(s) before saving this observation.")
-            else:
-                file_entries = []
-                for staged in staged_captures:
-                    file_entries.append({
-                        'filename': staged['filename'],
-                        'payload': staged['payload'],
-                        'mime': staged.get('mime', ''),
-                        'ingest_mode': staged.get('ingest_mode', 'direct_capture'),
-                    })
-                for uploaded in uploaded_files:
-                    file_entries.append({
-                        'filename': str(uploaded.name or '').strip(),
-                        'payload': uploaded.getvalue(),
-                        'mime': getattr(uploaded, 'type', ''),
-                        'ingest_mode': upload_mode,
-                    })
-                create_rwa_v1_visit(
-                    asset_id=current_asset_id,
-                    visit_id=display_visit_id,
-                    visit_data={"created_from": "rwa_intake_panel", "asset_category": current_asset_category},
-                )
-                create_rwa_v1_observation(
-                    observation_id=observation_display,
-                    visit_id=display_visit_id,
-                    asset_id=current_asset_id,
-                    lpi_code=(selected_lpi.split('|')[0].strip() if selected_lpi else ''),
-                    severity_0_5=int(severity),
-                    observation_description=observation_description,
-                    coordinator_notes=coordinator_notes,
-                    file_entries=file_entries,
-                )
-                st.success(f"Observation saved: {observation_display}")
-                st.session_state[observation_draft_key] = _build_observation_draft_id(display_visit_id)
+                st.rerun()
+            if action_right.button("Nueva observación", key="rwa_new_observation", use_container_width=True):
+                st.session_state[mode_key] = "new_observation"
+                asset_id_for_observation = st.session_state.get(asset_key, "")
+                if asset_id_for_observation and not st.session_state.get(visit_draft_key):
+                    st.session_state[visit_draft_key] = _build_visit_draft_id(asset_id_for_observation)
+                st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state.get(visit_draft_key, ""))
+                st.session_state[capture_enabled_key] = True
                 st.session_state[staged_captures_key] = []
                 st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
                 st.rerun()
 
-    if current_visit_photos:
-        st.dataframe(current_visit_photos, use_container_width=True, hide_index=True)
-    else:
-        st.info("No RWA photos registered for this visit yet.")
+            field_a, field_b = st.columns(2)
+            with field_a:
+                chosen_asset_label = st.selectbox(
+                    "Asset",
+                    asset_labels,
+                    index=asset_labels.index(current_asset_label) if current_asset_label in asset_labels else 0,
+                    key=asset_selectbox_key,
+                )
+                chosen_asset_id = asset_options[chosen_asset_label]
+                previous_asset_id = st.session_state.get(asset_key, "")
+                st.session_state[asset_key] = chosen_asset_id
+                if chosen_asset_id != previous_asset_id:
+                    st.session_state[visit_draft_key] = _build_visit_draft_id(chosen_asset_id)
+                    st.session_state[observation_draft_key] = _build_observation_draft_id(st.session_state[visit_draft_key])
+                    st.session_state[capture_enabled_key] = False
+                    st.session_state[staged_captures_key] = []
+                    st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
+
+            current_asset_id = st.session_state.get(asset_key, "")
+            current_asset_row = next((item for item in all_assets if str(item.get('asset_id') or '') == current_asset_id), None)
+            display_visit_id = st.session_state.get(visit_draft_key, "")
+            with field_b:
+                st.text_input("Número de visita", value=display_visit_id, disabled=True)
+
+            observation_display = st.session_state.get(observation_draft_key, "")
+            st.text_input("Número de observación", value=observation_display, disabled=True)
+
+            current_asset_category = str(current_asset_row.get('asset_type') or '') if current_asset_row else ''
+            asset_lpi_options = _resolve_rwa_lpi_options_for_category(current_asset_category)
+            selected_lpi = st.selectbox(
+                "LPI code (official)",
+                options=asset_lpi_options,
+                index=0,
+                disabled=not bool(current_asset_row),
+                key="rwa_lpi",
+            )
+            severity = st.selectbox(
+                "Severity (0-5)",
+                options=[0, 1, 2, 3, 4, 5],
+                index=0,
+                key="rwa_severity",
+            )
+            min_photos = 3 if int(severity) >= 3 else 1
+            observation_description = st.text_area(
+                "Description",
+                value="",
+                height=140,
+                key="rwa_description",
+            )
+
+        current_visit_photos = [item for item in all_photos if str(item.get('visit_id') or '') == display_visit_id]
+        existing_photo_names = {str(item.get('photo_filename') or '').strip().lower() for item in current_visit_photos}
+        current_visit_row = next((item for item in all_visits if str(item.get('visit_id') or '') == display_visit_id), None)
+        capture_status = str((current_visit_row or {}).get('direct_capture_session_status') or 'open')
+        capture_window_minutes = int((current_visit_row or {}).get('direct_capture_window_minutes') or 0)
+        direct_capture_count = len([item for item in current_visit_photos if str(item.get('ingest_mode') or '') == 'direct_capture'])
+        manual_upload_count = len([item for item in current_visit_photos if str(item.get('ingest_mode') or '') == 'manual_upload'])
+        upload_mode = 'direct_capture' if capture_status == 'open' else 'manual_upload'
+
+        with right:
+            metric_left, metric_right, metric_right_b = st.columns([0.45, 0.275, 0.275])
+            with metric_left:
+                st.markdown("<div style='display:flex;align-items:center;gap:12px;margin-top:4px;margin-bottom:10px;'><div style='font-family:Menlo,Monaco,monospace;font-size:13px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.06em;'>Registered photos</div><div style='font-family:Menlo,Monaco,monospace;font-size:22px;font-weight:800;color:#0f172a;'>" + str(len(current_visit_photos)) + "</div></div>", unsafe_allow_html=True)
+            with metric_right:
+                st.metric('Direct capture', direct_capture_count)
+            with metric_right_b:
+                st.metric('Manual upload', manual_upload_count)
+            capture_action_left, capture_action_right = st.columns(2)
+            if capture_action_left.button("Iniciar captura", key="rwa_start_capture", use_container_width=True):
+                st.session_state[capture_enabled_key] = True
+                st.rerun()
+            if capture_action_right.button("Finalizar captura", key="rwa_finish_capture", use_container_width=True):
+                if display_visit_id:
+                    create_rwa_v1_visit(
+                        asset_id=current_asset_id,
+                        visit_id=display_visit_id,
+                        visit_data={"created_from": "rwa_intake_panel", "asset_category": current_asset_category},
+                    )
+                    finalize_rwa_v1_capture_session(display_visit_id)
+                st.session_state[capture_enabled_key] = False
+                st.rerun()
+            if capture_status == 'open':
+                st.info(f'Direct capture session open. It will close automatically after 10 minutes without a new capture. Current capture window: {capture_window_minutes} min.')
+            else:
+                st.warning('Direct capture session closed. New files will be registered as manual uploads. This will not block issuance, but it must be reflected in the final output.')
+            if st.session_state.get(capture_enabled_key, False):
+                camera_capture = st.camera_input("Capturar foto", key=f"rwa_camera_capture::{st.session_state.get(camera_nonce_key, 0)}")
+                if camera_capture is not None:
+                    staged_captures = list(st.session_state.get(staged_captures_key, []))
+                    filename = str(camera_capture.name or f"capture_{len(staged_captures)+1}.jpg").strip()
+                    normalized_filename = filename.lower()
+                    staged_names = {str(item.get('filename') or '').lower() for item in staged_captures}
+                    if normalized_filename in existing_photo_names or normalized_filename in staged_names:
+                        st.error(f"Duplicate photo name detected for camera capture: {filename}")
+                    else:
+                        staged_captures.append({
+                            'filename': filename,
+                            'payload': camera_capture.getvalue(),
+                            'mime': getattr(camera_capture, 'type', ''),
+                            'ingest_mode': 'direct_capture' if capture_status == 'open' else 'manual_upload',
+                        })
+                        st.session_state[staged_captures_key] = staged_captures
+                        st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
+                        st.rerun()
+            uploaded_files = st.file_uploader(
+                "Upload photos",
+                type=["jpg", "jpeg", "png", "heic", "heif", "webp", "bmp", "tif", "tiff"],
+                accept_multiple_files=True,
+                key="rwa_uploader",
+                label_visibility="collapsed",
+                help=("Files are treated as direct capture while the session is open, and as manual upload after the session closes."),
+            )
+            uploaded_files = uploaded_files or []
+            staged_captures = list(st.session_state.get(staged_captures_key, []))
+            uploaded_names = [str(item.name or '').strip() for item in uploaded_files]
+            staged_names = [str(item.get('filename') or '').strip() for item in staged_captures]
+            all_candidate_names = [name for name in uploaded_names + staged_names if name]
+            normalized_names = [name.lower() for name in all_candidate_names]
+            duplicate_inside_upload = sorted({name for name in normalized_names if normalized_names.count(name) > 1})
+            duplicate_against_existing = sorted({name for name in normalized_names if name in existing_photo_names})
+            has_duplicate_names = bool(duplicate_inside_upload or duplicate_against_existing)
+            uploaded_count = len(uploaded_files) + len(staged_captures)
+            if staged_captures:
+                st.caption(f"Camera captures staged: {len(staged_captures)}")
+            if has_duplicate_names:
+                duplicate_messages = []
+                if duplicate_inside_upload:
+                    duplicate_messages.append("duplicated in current selection: " + ", ".join(duplicate_inside_upload))
+                if duplicate_against_existing:
+                    duplicate_messages.append("already registered in visit: " + ", ".join(duplicate_against_existing))
+                st.error("Duplicate photo name detected: " + " | ".join(duplicate_messages))
+            elif uploaded_count >= min_photos:
+                st.success(f"Photos: {uploaded_count}/{min_photos}")
+            else:
+                st.error(f"Photos: {uploaded_count}/{min_photos} (minimum required)")
+
+            if st.button("Guardar observación", type="primary", key="rwa_save_observation", use_container_width=True):
+                if not current_asset_id:
+                    st.warning("Select an asset first.")
+                elif not display_visit_id:
+                    st.warning("The visit id could not be generated yet.")
+                elif not observation_display:
+                    st.warning("The observation id could not be generated yet.")
+                elif has_duplicate_names:
+                    st.warning("Duplicate photo names must be resolved before saving the observation.")
+                elif uploaded_count < min_photos:
+                    st.warning(f"You must upload at least {min_photos} photo(s) before saving this observation.")
+                else:
+                    file_entries = []
+                    for staged in staged_captures:
+                        file_entries.append({
+                            'filename': staged['filename'],
+                            'payload': staged['payload'],
+                            'mime': staged.get('mime', ''),
+                            'ingest_mode': staged.get('ingest_mode', 'direct_capture'),
+                        })
+                    for uploaded in uploaded_files:
+                        file_entries.append({
+                            'filename': str(uploaded.name or '').strip(),
+                            'payload': uploaded.getvalue(),
+                            'mime': getattr(uploaded, 'type', ''),
+                            'ingest_mode': upload_mode,
+                        })
+                    create_rwa_v1_visit(
+                        asset_id=current_asset_id,
+                        visit_id=display_visit_id,
+                        visit_data={"created_from": "rwa_intake_panel", "asset_category": current_asset_category},
+                    )
+                    create_rwa_v1_observation(
+                        observation_id=observation_display,
+                        visit_id=display_visit_id,
+                        asset_id=current_asset_id,
+                        lpi_code=(selected_lpi.split('|')[0].strip() if selected_lpi else ''),
+                        severity_0_5=int(severity),
+                        observation_description=observation_description,
+                        coordinator_notes="",
+                        file_entries=file_entries,
+                    )
+                    st.success(f"Observation saved: {observation_display}")
+                    st.session_state[observation_draft_key] = _build_observation_draft_id(display_visit_id)
+                    st.session_state[staged_captures_key] = []
+                    st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
+                    st.rerun()
+
+        if current_visit_photos:
+            st.dataframe(current_visit_photos, use_container_width=True, hide_index=True)
+        else:
+            st.info("No RWA photos registered for this visit yet.")
+
+    with rwa_tab_review:
+        review_rows = []
+        for visit in all_visits:
+            asset_row = next((item for item in all_assets if str(item.get('asset_id') or '') == str(visit.get('asset_id') or '')), {})
+            photos_for_visit = [item for item in all_photos if str(item.get('visit_id') or '') == str(visit.get('visit_id') or '')]
+            review_rows.append({
+                'OPEN': False,
+                'VISIT DATE': str(visit.get('visit_date_utc') or ''),
+                'VISIT ID': str(visit.get('visit_id') or ''),
+                'ASSET': str(asset_row.get('asset_name') or asset_row.get('asset_public_id') or ''),
+                'CAPTURE STATUS': str(visit.get('direct_capture_session_status') or ''),
+                'VISIT STATUS': str(visit.get('visit_status') or ''),
+                'ISSUANCE STATUS': str(visit.get('issuance_status') or ''),
+                'PHOTOS': len(photos_for_visit),
+            })
+        review_df = pd.DataFrame(review_rows)
+        review_event = st.data_editor(
+            review_df,
+            use_container_width=True,
+            hide_index=True,
+            key='rwa_review_visits_editor',
+            column_config={'OPEN': st.column_config.CheckboxColumn('OPEN')},
+            disabled=['VISIT DATE','VISIT ID','ASSET','CAPTURE STATUS','VISIT STATUS','ISSUANCE STATUS','PHOTOS'],
+        )
+        selected_rows = review_event[review_event['OPEN'] == True] if isinstance(review_event, pd.DataFrame) else pd.DataFrame()
+        if len(selected_rows) == 1:
+            selected_visit_id = str(selected_rows.iloc[0].get('VISIT ID') or '')
+            selected_visit = next((item for item in all_visits if str(item.get('visit_id') or '') == selected_visit_id), None)
+            selected_asset = next((item for item in all_assets if str(item.get('asset_id') or '') == str((selected_visit or {}).get('asset_id') or '')), None)
+            st.markdown('### Pending review details')
+            c1, c2, c3 = st.columns(3)
+            c1.metric('Visit', selected_visit_id)
+            c2.metric('Capture status', str((selected_visit or {}).get('direct_capture_session_status') or ''))
+            c3.metric('Issuance status', str((selected_visit or {}).get('issuance_status') or ''))
+            st.text_input('Asset', value=str((selected_asset or {}).get('asset_name') or ''), disabled=True, key='rwa_review_asset_name')
+            st.text_area('Comentarios antes de la emisión', key='rwa_pre_issue_comments', height=120)
+            review_uploads = st.file_uploader(
+                'Añadir fotos o documentación adicional',
+                type=['jpg','jpeg','png','heic','heif','webp','bmp','tif','tiff','pdf','doc','docx'],
+                accept_multiple_files=True,
+                key='rwa_review_uploader',
+            ) or []
+            review_left, review_right = st.columns(2)
+            if review_left.button('Guardar anexos', key='rwa_review_attach', use_container_width=True):
+                inserted = attach_rwa_v1_files_to_visit(visit_id=selected_visit_id, uploaded_files=review_uploads)
+                st.success(f'Attached files: {inserted}')
+                st.rerun()
+            if review_right.button('Validar y firmar', key='rwa_review_issue', type='primary', use_container_width=True):
+                validate_and_issue_rwa_v1_visit(visit_id=selected_visit_id, pre_issue_comments=str(st.session_state.get('rwa_pre_issue_comments') or ''))
+                st.success(f'Visit validated and issued: {selected_visit_id}')
+                st.rerun()
+        elif len(selected_rows) > 1:
+            st.info('Select exactly one visit to review and issue.')
+        else:
+            st.info('Select one visit from the table to review, add files, and validate/sign.')
 
 
 def _render_legacy_panel_b(context: dict) -> None:
