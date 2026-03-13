@@ -79,6 +79,7 @@ from common.services.rwa_v1_store import (
     list_rwa_v1_photos_raw,
     list_rwa_v1_visits_raw,
     remove_rwa_v1_review_artifact,
+    replace_rwa_v1_review_artifact,
     refresh_rwa_v1_capture_session,
     validate_and_issue_rwa_v1_visit,
 )
@@ -2761,14 +2762,16 @@ def _render_rwa_placeholder() -> None:
             c3.metric('Issuance status', str((selected_visit or {}).get('issuance_status') or ''))
             st.text_input('Asset', value=str((selected_asset or {}).get('asset_name') or ''), disabled=True, key='rwa_review_asset_name')
             comment_widget_key = f"rwa_pre_issue_comments::{selected_visit_id}"
-            comment_draft_key = f"{comment_widget_key}::draft"
             stored_comments = str(visit_data.get('pre_issue_comments') or '')
             if st.session_state.get('rwa_review_current_visit') != selected_visit_id:
                 st.session_state['rwa_review_current_visit'] = selected_visit_id
-                st.session_state[comment_draft_key] = stored_comments
-            elif comment_draft_key not in st.session_state:
-                st.session_state[comment_draft_key] = stored_comments
-            current_comments = st.text_area('Comentarios antes de la emisión', value=st.session_state.get(comment_draft_key, ''), key=comment_widget_key, height=120)
+                st.session_state[comment_widget_key] = stored_comments
+            elif comment_widget_key not in st.session_state:
+                st.session_state[comment_widget_key] = stored_comments
+            if st.session_state.get('rwa_review_reload_visit') == selected_visit_id:
+                st.session_state[comment_widget_key] = stored_comments
+                st.session_state['rwa_review_reload_visit'] = ""
+            current_comments = st.text_area('Comentarios antes de la emisión', key=comment_widget_key, height=120)
             review_uploads = st.file_uploader(
                 'Añadir fotos o documentación adicional',
                 type=['jpg','jpeg','png','heic','heif','webp','bmp','tif','tiff','pdf','doc','docx'],
@@ -2777,16 +2780,15 @@ def _render_rwa_placeholder() -> None:
             ) or []
             review_left, review_right = st.columns(2)
             if review_left.button('Guardar comentarios y anexos', key='rwa_review_attach', use_container_width=True):
-                st.session_state[comment_draft_key] = current_comments
                 inserted = attach_rwa_v1_files_to_visit(
                     visit_id=selected_visit_id,
                     uploaded_files=review_uploads,
                     pre_issue_comments=current_comments,
                 )
+                st.session_state['rwa_review_reload_visit'] = selected_visit_id
                 st.success(f'Comentarios guardados y anexos añadidos: {inserted}')
                 st.rerun()
             if review_right.button('Validar y firmar', key='rwa_review_issue', type='primary', use_container_width=True):
-                st.session_state[comment_draft_key] = current_comments
                 validate_and_issue_rwa_v1_visit(visit_id=selected_visit_id, pre_issue_comments=current_comments)
                 st.success(f'Visit validated and issued: {selected_visit_id}')
                 st.rerun()
@@ -2813,6 +2815,7 @@ def _render_rwa_placeholder() -> None:
             for photo in selected_visit_photos:
                 if str(photo.get('ingest_mode') or '') == 'manual_upload':
                     review_artifact_rows.append({
+                        'OPEN': False,
                         'REMOVE': False,
                         'TYPE': 'photo',
                         'ID': str(photo.get('photo_id') or ''),
@@ -2821,6 +2824,7 @@ def _render_rwa_placeholder() -> None:
                     })
             for attachment in selected_visit_attachments:
                 review_artifact_rows.append({
+                    'OPEN': False,
                     'REMOVE': False,
                     'TYPE': 'attachment',
                     'ID': str(attachment.get('attachment_id') or ''),
@@ -2834,16 +2838,46 @@ def _render_rwa_placeholder() -> None:
                     use_container_width=True,
                     hide_index=True,
                     key='rwa_review_artifacts_editor',
-                    column_config={'REMOVE': st.column_config.CheckboxColumn('REMOVE')},
+                    column_config={
+                        'OPEN': st.column_config.CheckboxColumn('OPEN'),
+                        'REMOVE': st.column_config.CheckboxColumn('REMOVE'),
+                    },
                     disabled=['TYPE', 'ID', 'FILENAME', 'ADDED AT'],
                 )
+                selected_artifact_rows = artifact_editor[artifact_editor['OPEN'] == True] if isinstance(artifact_editor, pd.DataFrame) else pd.DataFrame()
                 removable_rows = artifact_editor[artifact_editor['REMOVE'] == True] if isinstance(artifact_editor, pd.DataFrame) else pd.DataFrame()
+                if len(selected_artifact_rows) == 1:
+                    selected_artifact = selected_artifact_rows.iloc[0]
+                    st.markdown('#### Detalle del anexo seleccionado')
+                    d1, d2, d3 = st.columns(3)
+                    d1.text_input('Tipo', value=str(selected_artifact.get('TYPE') or ''), disabled=True, key='rwa_selected_artifact_type')
+                    d2.text_input('Archivo', value=str(selected_artifact.get('FILENAME') or ''), disabled=True, key='rwa_selected_artifact_filename')
+                    d3.text_input('Añadido', value=str(selected_artifact.get('ADDED AT') or ''), disabled=True, key='rwa_selected_artifact_added')
+                    st.text_area('Comentario guardado para esta visita', value=current_comments, disabled=True, height=100, key='rwa_selected_artifact_comments')
+                    replacement = st.file_uploader(
+                        'Reemplazar archivo seleccionado',
+                        type=['jpg','jpeg','png','heic','heif','webp','bmp','tif','tiff','pdf','doc','docx'],
+                        accept_multiple_files=False,
+                        key=f"rwa_replace_artifact::{selected_visit_id}::{selected_artifact.get('ID')}",
+                    )
+                    if st.button('Reemplazar archivo', key='rwa_replace_selected_artifact', use_container_width=True, disabled=replacement is None):
+                        replaced = replace_rwa_v1_review_artifact(
+                            visit_id=selected_visit_id,
+                            artifact_kind=str(selected_artifact.get('TYPE') or ''),
+                            artifact_id=str(selected_artifact.get('ID') or ''),
+                            replacement_file=replacement,
+                        )
+                        if replaced:
+                            st.success('Archivo reemplazado.')
+                            st.rerun()
+                        else:
+                            st.error('No se pudo reemplazar el archivo seleccionado.')
                 if st.button('Eliminar seleccionados', key='rwa_review_remove_artifacts'):
                     removed = 0
                     for _, row in removable_rows.iterrows():
                         if remove_rwa_v1_review_artifact(
                             visit_id=selected_visit_id,
-                            artifact_kind=str(row.get('TYPE') or ''),
+                                artifact_kind=str(row.get('TYPE') or ''),
                             artifact_id=str(row.get('ID') or ''),
                         ):
                             removed += 1

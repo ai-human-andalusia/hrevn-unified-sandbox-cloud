@@ -563,6 +563,99 @@ def remove_rwa_v1_review_artifact(*, visit_id: str, artifact_kind: str, artifact
         return bool(deleted)
 
 
+def replace_rwa_v1_review_artifact(
+    *,
+    visit_id: str,
+    artifact_kind: str,
+    artifact_id: str,
+    replacement_file,
+    db_path: Path | None = None,
+) -> bool:
+    target = ensure_rwa_capture_schema(db_path)
+    now = _now_utc()
+    with _connect(target) as conn:
+        visit_row = conn.execute("SELECT issuance_status, asset_id FROM rwa_visits WHERE visit_id = ?", (visit_id,)).fetchone()
+        if not visit_row:
+            return False
+        if str(visit_row[0] or "") == "issued":
+            return False
+        asset_id = str(visit_row[1] or "")
+        filename = str(getattr(replacement_file, "name", "") or "").strip()
+        payload = replacement_file.getvalue()
+        mime = str(getattr(replacement_file, "type", "") or "")
+        if not filename:
+            return False
+        lowered = filename.lower()
+        existing_photo_names = {
+            str(row[0] or "").strip().lower()
+            for row in conn.execute(
+                "SELECT photo_filename FROM rwa_photos WHERE visit_id = ? AND photo_id != ?",
+                (visit_id, artifact_id if artifact_kind == "photo" else ""),
+            ).fetchall()
+        }
+        existing_attachment_names = {
+            str(row[0] or "").strip().lower()
+            for row in conn.execute(
+                "SELECT attachment_filename FROM rwa_attachments WHERE visit_id = ? AND attachment_id != ?",
+                (visit_id, artifact_id if artifact_kind == "attachment" else ""),
+            ).fetchall()
+        }
+        if lowered in existing_photo_names or lowered in existing_attachment_names:
+            return False
+        if artifact_kind == "photo":
+            row = conn.execute(
+                "SELECT ingest_mode FROM rwa_photos WHERE photo_id = ? AND visit_id = ?",
+                (artifact_id, visit_id),
+            ).fetchone()
+            if not row or str(row[0] or "") != "manual_upload":
+                return False
+            conn.execute(
+                """
+                UPDATE rwa_photos
+                SET photo_filename = ?,
+                    photo_hash_sha256 = ?,
+                    added_to_record_at_utc = ?,
+                    photo_data_json = ?
+                WHERE photo_id = ? AND visit_id = ?
+                """,
+                (
+                    filename,
+                    _sha256_bytes(payload),
+                    now,
+                    json.dumps({"size_bytes": len(payload), "mime": mime, "upload_mode": "manual_upload", "replaced_in_review": True}),
+                    artifact_id,
+                    visit_id,
+                ),
+            )
+        elif artifact_kind == "attachment":
+            attachment_kind = "pdf" if filename.lower().endswith(".pdf") else "document"
+            conn.execute(
+                """
+                UPDATE rwa_attachments
+                SET attachment_filename = ?,
+                    attachment_hash_sha256 = ?,
+                    attachment_kind = ?,
+                    added_to_record_at_utc = ?,
+                    attachment_data_json = ?
+                WHERE attachment_id = ? AND visit_id = ?
+                """,
+                (
+                    filename,
+                    _sha256_bytes(payload),
+                    attachment_kind,
+                    now,
+                    json.dumps({"size_bytes": len(payload), "mime": mime, "added_mode": "manual_upload", "replaced_in_review": True}),
+                    artifact_id,
+                    visit_id,
+                ),
+            )
+        else:
+            return False
+        conn.execute("UPDATE rwa_visits SET updated_at_utc = ? WHERE visit_id = ?", (now, visit_id))
+        conn.commit()
+        return True
+
+
 def validate_and_issue_rwa_v1_visit(*, visit_id: str, pre_issue_comments: str = "", db_path: Path | None = None) -> dict | None:
     target = ensure_rwa_capture_schema(db_path)
     now = _now_utc()
