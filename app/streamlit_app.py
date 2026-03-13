@@ -4651,6 +4651,11 @@ def main() -> None:
             st.rerun()
 
     target = st.session_state.get("main_tab_target")
+    auth_role = st.session_state.get("auth_role")
+
+    if auth_role == "operator" and not target:
+        _render_rwa_placeholder()
+        return
 
     if target == "gov_photovoltaic":
         render_gov_photovoltaic_vertical()
