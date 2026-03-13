@@ -2643,24 +2643,14 @@ def _render_rwa_placeholder() -> None:
                         st.session_state[staged_captures_key] = staged_captures
                         st.session_state[camera_nonce_key] = st.session_state.get(camera_nonce_key, 0) + 1
                         st.rerun()
-            uploaded_files = st.file_uploader(
-                "Upload photos",
-                type=["jpg", "jpeg", "png", "heic", "heif", "webp", "bmp", "tif", "tiff"],
-                accept_multiple_files=True,
-                key="rwa_uploader",
-                label_visibility="collapsed",
-                help=("Files are treated as direct capture while the session is open, and as manual upload after the session closes."),
-            )
-            uploaded_files = uploaded_files or []
             staged_captures = list(st.session_state.get(staged_captures_key, []))
-            uploaded_names = [str(item.name or '').strip() for item in uploaded_files]
             staged_names = [str(item.get('filename') or '').strip() for item in staged_captures]
-            all_candidate_names = [name for name in uploaded_names + staged_names if name]
+            all_candidate_names = [name for name in staged_names if name]
             normalized_names = [name.lower() for name in all_candidate_names]
             duplicate_inside_upload = sorted({name for name in normalized_names if normalized_names.count(name) > 1})
             duplicate_against_existing = sorted({name for name in normalized_names if name in existing_photo_names})
             has_duplicate_names = bool(duplicate_inside_upload or duplicate_against_existing)
-            uploaded_count = len(uploaded_files) + len(staged_captures)
+            uploaded_count = len(staged_captures)
             if staged_captures:
                 st.caption(f"Camera captures staged: {len(staged_captures)}")
             if has_duplicate_names:
@@ -2694,13 +2684,6 @@ def _render_rwa_placeholder() -> None:
                             'payload': staged['payload'],
                             'mime': staged.get('mime', ''),
                             'ingest_mode': staged.get('ingest_mode', 'direct_capture'),
-                        })
-                    for uploaded in uploaded_files:
-                        file_entries.append({
-                            'filename': str(uploaded.name or '').strip(),
-                            'payload': uploaded.getvalue(),
-                            'mime': getattr(uploaded, 'type', ''),
-                            'ingest_mode': upload_mode,
                         })
                     create_rwa_v1_visit(
                         asset_id=current_asset_id,
@@ -2777,10 +2760,11 @@ def _render_rwa_placeholder() -> None:
             c2.metric('Capture status', str((selected_visit or {}).get('direct_capture_session_status') or ''))
             c3.metric('Issuance status', str((selected_visit or {}).get('issuance_status') or ''))
             st.text_input('Asset', value=str((selected_asset or {}).get('asset_name') or ''), disabled=True, key='rwa_review_asset_name')
-            if st.session_state.get('rwa_review_current_visit') != selected_visit_id:
-                st.session_state['rwa_review_current_visit'] = selected_visit_id
-                st.session_state['rwa_pre_issue_comments'] = str(visit_data.get('pre_issue_comments') or '')
-            st.text_area('Comentarios antes de la emisión', key='rwa_pre_issue_comments', height=120)
+            comment_widget_key = f"rwa_pre_issue_comments::{selected_visit_id}"
+            stored_comments = str(visit_data.get('pre_issue_comments') or '')
+            if comment_widget_key not in st.session_state:
+                st.session_state[comment_widget_key] = stored_comments
+            st.text_area('Comentarios antes de la emisión', key=comment_widget_key, height=120)
             review_uploads = st.file_uploader(
                 'Añadir fotos o documentación adicional',
                 type=['jpg','jpeg','png','heic','heif','webp','bmp','tif','tiff','pdf','doc','docx'],
@@ -2789,15 +2773,17 @@ def _render_rwa_placeholder() -> None:
             ) or []
             review_left, review_right = st.columns(2)
             if review_left.button('Guardar comentarios y anexos', key='rwa_review_attach', use_container_width=True):
+                current_comments = str(st.session_state.get(comment_widget_key) or '')
                 inserted = attach_rwa_v1_files_to_visit(
                     visit_id=selected_visit_id,
                     uploaded_files=review_uploads,
-                    pre_issue_comments=str(st.session_state.get('rwa_pre_issue_comments') or ''),
+                    pre_issue_comments=current_comments,
                 )
+                st.session_state[comment_widget_key] = current_comments
                 st.success(f'Comentarios guardados y anexos añadidos: {inserted}')
                 st.rerun()
             if review_right.button('Validar y firmar', key='rwa_review_issue', type='primary', use_container_width=True):
-                validate_and_issue_rwa_v1_visit(visit_id=selected_visit_id, pre_issue_comments=str(st.session_state.get('rwa_pre_issue_comments') or ''))
+                validate_and_issue_rwa_v1_visit(visit_id=selected_visit_id, pre_issue_comments=str(st.session_state.get(comment_widget_key) or ''))
                 st.success(f'Visit validated and issued: {selected_visit_id}')
                 st.rerun()
             summary_rows = []
